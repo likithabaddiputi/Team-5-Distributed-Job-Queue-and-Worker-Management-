@@ -1,8 +1,15 @@
+import os
 import subprocess
+import sys
 import threading
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+CLIENT = os.path.join(HERE, "simple_client.py")
+
+
 def run_client(n):
-    subprocess.run(["python3", "simple_client.py", str(n)])
+    subprocess.run([sys.executable, CLIENT, str(n)])
+
 
 threads = []
 for i in range(5):
