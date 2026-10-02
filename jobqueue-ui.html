@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Job Queue SDN Lab</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+:root{--bg:#eef1f6;--panel:#fff;--ink:#1c2433;--mut:#66728a;--line:#c9d2e0;--wire:#8795ae;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#141a27;--panel:#1d2536;--ink:#e6ebf5;--mut:#8f9bb3;--line:#2e3a52;--wire:#5a6a8a}}
+:root[data-theme="dark"]{--bg:#141a27;--panel:#1d2536;--ink:#e6ebf5;--mut:#8f9bb3;--line:#2e3a52;--wire:#5a6a8a}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px 'Space Grotesk',system-ui,sans-serif}
+.bar{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--line)}
+.bar h1{font-size:16px;margin:0 6px 0 0}
+.grp{display:flex;gap:6px;align-items:center;padding-left:14px;border-left:1px solid var(--line)}
+button,select,input{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:5px 10px}
+button{cursor:pointer}button:hover{border-color:var(--wire)}
+button.go{background:#4f46e5;color:#fff;border-color:#4f46e5;font-weight:600}button.go.on{background:#dc2626;border-color:#dc2626}
+input[type=number]{width:62px}input[type=range]{width:110px;padding:0}
+.leg{display:flex;flex-wrap:wrap;gap:10px;padding:8px 14px;color:var(--mut);font-size:12px}
+.leg i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px;vertical-align:-1px}
+.wrap{overflow:auto;max-width:100%}
+#stage{position:relative;width:1480px;margin:0 auto;background-image:radial-gradient(var(--line) 1px,transparent 1px);background-size:22px 22px}
+#stage svg{position:absolute;left:0;top:0;pointer-events:none}
+.wire{stroke:var(--wire);stroke-width:3;stroke-linecap:round}.wire.off{stroke:#dc2626;stroke-dasharray:3 7;opacity:.6}.wire.ctl{stroke-dasharray:8 6;stroke-width:2}
+.sw{fill:var(--panel);stroke:var(--wire);stroke-width:2}
+.card{position:absolute;width:340px;height:280px;background:var(--panel);border:1px solid var(--line);border-radius:12px;display:flex;flex-direction:column;overflow:hidden;border-top:4px solid var(--c)}
+.card.client{--c:#3b82f6}.card.worker{--c:#f59e0b}.card.coord{--c:#a855f7}.card.ctrl{--c:#14b8a6}
+.card.frz{border-color:#38bdf8;border-style:dashed}.card.dead{opacity:.75;border-color:#dc2626}.stopped .card{opacity:.55}
+.hd{padding:6px 9px 4px;font-size:12px;position:relative;height:78px}
+.hd b{font-size:13px}.hd .m{color:var(--mut);font-family:'JetBrains Mono',monospace;font-size:11px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;margin-right:5px}.dead .dot{background:#dc2626}
+.hd .row{margin-top:2px;display:flex;gap:5px;align-items:center;color:var(--mut)}
+.hd button{padding:1px 8px;font-size:12px}.hd input{width:48px;padding:1px 4px;font-size:12px}
+.x{position:absolute;right:6px;top:4px;border:0!important;background:none!important;color:var(--mut)}
+.term{margin:0;flex:1;overflow:auto;background:#0d121c;color:#c5cee0;font:12px/1.5 'JetBrains Mono',monospace;padding:6px 8px;white-space:pre-wrap;word-break:break-word}
+.term .ok{color:#6ee7a0}.term .err{color:#ff8a8a}.term .warn{color:#fbbf24}
+.pnl{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:12px 14px}
+.pnl>div{background:var(--panel);border:1px solid var(--line);border-radius:10px;height:230px;overflow:auto;padding:8px 10px}
+.pnl h3{margin:0 0 6px;font-size:13px}
+table{width:100%;border-collapse:collapse;font-size:12px}td,th{text-align:left;padding:3px 5px;border-bottom:1px solid var(--line)}
+.lg{font:11px 'JetBrains Mono',monospace;border-bottom:1px solid var(--line);padding:2px 0;color:var(--mut)}.lg b{color:var(--ink)}
+@media(max-width:760px){.pnl{grid-template-columns:1fr}}
+</style></head><body>
+<div class="bar">
+ <h1>Job Queue SDN Lab</h1><span id="mode" style="color:var(--mut);font-size:12px">simulation (backend not found)</span>
+ <button class="go" id="run">Run</button><button id="pause">Pause</button>
+ <label>Speed <input type="range" id="spd" min="0.05" max="4" step="0.05" value="1"> <span id="spv">1×</span></label>
+ <label title="Not in the original coordinator (it only notices closed connections). Set 0 for exact original behaviour.">Heartbeat timeout <input type="number" id="to" value="9" min="0" max="60"> s</label><label><input type="checkbox" id="hb" checked> show heartbeats</label>
+ <span id="clk" style="color:var(--mut)">stopped</span>
+ <div class="grp"><button id="ac">+ Client</button><button id="aw">+ Worker</button></div>
+ <div class="grp"><select id="jc"></select> <input type="number" id="jn" value="7" min="-100000" max="100000" title="n: worker returns n*n"><button id="send">Send job</button><button id="burst">Send 5 random</button></div>
+</div>
+<div class="leg" id="leg"></div>
+<div class="wrap"><div id="stage" class="stopped"><svg id="wires"></svg><div id="cards"></div><svg id="pk"></svg></div></div>
+<div class="pnl"><div><h3>Jobs</h3><table id="jt"></table></div><div><h3>Packet log (every packet, with payload)</h3><div id="pl"></div></div></div>
+<script>
+const $=s=>document.querySelector(s),W=340,H=280,SWW=1480;
+const COL={SYN:'#0ea5e9',SUBMIT:'#3b82f6',ACK:'#16a34a',JOB:'#f59e0b',RESULT:'#a855f7',DONE:'#7c3aed',REGISTER:'#0d9488',HEARTBEAT:'#64748b',FIN:'#dc2626'};
+$('#leg').innerHTML=Object.entries(COL).map(([k,c])=>`<span><i style="background:${c}"></i>${k}</span>`).join('')+'<span>gray dot = OpenFlow PACKET_IN / FLOW_MOD to controller</span>';
+let L=.6,LIVE=false,LIVE_READY=false,nodes=[],host=1,wk=1,S,sw={x:0,y:0},SH=720,speed=1,paused=false;
+const rp=()=>30000+Math.floor(Math.random()*30000);
+const mk=(type,name)=>{const h=host++;const n={id:'h'+h,type,name,ip:'10.0.0.'+h,log:[],alive:true,frozen:false,gen:0,min:2,max:8,buf:[],timer:null,port:rp()};if(type=='worker')n.wid='w'+wk++;return n};
+nodes=[mk('client','Client 1'),mk('coord','Coordinator'),mk('worker','Worker 1'),mk('worker','Worker 2'),{id:'c0',type:'ctrl',name:'Ryu controller',ip:'127.0.0.1:6633',log:[],alive:true}];
+const node=id=>nodes.find(n=>n.id==id),coord=()=>nodes.find(n=>n.type=='coord'),ctrl=()=>nodes.find(n=>n.type=='ctrl');
+const fresh=()=>{S={t:0,running:false,pkts:[],timers:[],jobs:[],flows:new Set(),pid:0}};fresh();
+function layout(){const cs=nodes.filter(n=>n.type=='client'),ws=nodes.filter(n=>n.type=='worker');
+ SH=Math.max(720,Math.max(cs.length,ws.length)*(H+18)+40);sw={x:SWW/2,y:SH/2};
+ cs.forEach((n,i)=>{n.x=20;n.y=20+i*(H+18)});ws.forEach((n,i)=>{n.x=SWW-W-20;n.y=20+i*(H+18)});
+ const c=coord(),k=ctrl();c.x=k.x=SWW/2-W/2;c.y=16;k.y=SH-H-16}
+function anc(n){return n.type=='client'?{x:n.x+W,y:n.y+H/2}:n.type=='worker'?{x:n.x,y:n.y+H/2}:n.type=='coord'?{x:n.x+W/2,y:n.y+H}:{x:n.x+W/2,y:n.y}}
+const sub={client:'simple_client.py',coord:'simple_coordinator.py :6000',ctrl:'OpenFlow 1.3 learning switch'};
+function build(){layout();const st=$('#stage');st.style.height=SH+'px';st.className=S.running?'':'stopped';
+ ['wires','pk'].forEach(i=>{$('#'+i).setAttribute('width',SWW);$('#'+i).setAttribute('height',SH)});
+ $('#cards').innerHTML=nodes.map(n=>`<div class="card ${n.type} ${n.alive?'':'dead'} ${n.frozen?'frz':''}" id="n-${n.id}" style="left:${n.x}px;top:${n.y}px">
+ <div class="hd"><b><span class="dot"></span>${n.name}</b>${n.type=='coord'||n.type=='ctrl'?'':`<button class="x" data-a="rm" data-i="${n.id}" title="Remove">×</button>`}
+ <div class="m">${n.id} ${n.ip}${n.wid?' id='+n.wid:''}</div>${n.type=='worker'?`<div class="row"><button data-a="kill" data-i="${n.id}">${n.alive?'Kill':'Revive'}</button><button data-a="frz" data-i="${n.id}" ${n.alive?'':'disabled'}>${n.frozen?'Unfreeze':'Freeze'}</button></div>
+ <div class="row">work <input type="number" min="0" data-a="mn" data-i="${n.id}" value="${n.min}">-<input type="number" min="0" data-a="mx" data-i="${n.id}" value="${n.max}">s</div>`:`<div class="row">${sub[n.type]}</div>`}</div>
+ <pre class="term" id="t-${n.id}"></pre></div>`).join('');
+ nodes.forEach(n=>{const e=$('#t-'+n.id);n.log.forEach(l=>addLine(e,l))});
+ const v=$('#jc').value;$('#jc').innerHTML=nodes.filter(n=>n.type=='client').map(n=>`<option value="${n.id}">${n.name}</option>`).join('');if(v&&node(v))$('#jc').value=v;
+ wires();renderJobs()}
+function wires(){let s='';nodes.forEach(n=>{const a=anc(n);s+=`<line x1="${a.x}" y1="${a.y}" x2="${sw.x}" y2="${sw.y}" class="wire ${n.alive?'':'off'} ${n.type=='ctrl'?'ctl':''}"/>`});
+ s+=`<rect x="${sw.x-36}" y="${sw.y-22}" width="72" height="44" rx="10" class="sw"/><text x="${sw.x}" y="${sw.y-3}" text-anchor="middle" fill="var(--ink)" font-weight="700" font-size="13">s1</text><text x="${sw.x}" y="${sw.y+13}" text-anchor="middle" fill="var(--mut)" font-size="10">OVS OF1.3</text>`;$('#wires').innerHTML=s}
+function addLine(e,l){const d=document.createElement('div');d.className=l.c;d.textContent=`[${l.t.toFixed(1)}s] ${l.m}`;e.append(d);while(e.children.length>60)e.firstChild.remove();e.scrollTop=1e9}
+function nlog(n,m,c=''){const l={t:S.t,m,c};n.log.push(l);if(n.log.length>60)n.log.shift();const e=$('#t-'+n.id);if(e)addLine(e,l)}
+const show=(c,tag,m,k)=>nlog(c,('['+tag+']').padEnd(11)+m,k);
+const at=(d,f)=>{const t={t:S.t+d,f};S.timers.push(t);return t};
+function runTimers(){let due;while((due=S.timers.filter(x=>!x.x&&x.t<=S.t)).length){due.sort((a,b)=>a.t-b.t);due.forEach(x=>{x.x=1;x.f()})}S.timers=S.timers.filter(x=>!x.x)}
+function send(a,b,type,raw,meta={}){if(!S.running)return;const p={id:++S.pid,a,b,type,pl:raw,st:0,ss:S.t,label:raw,...meta};
+ if(type=='HEARTBEAT'&&!$('#hb').checked){if(!LIVE)deliver(p);return}
+ S.pkts.push(p);const d=document.createElement('div');d.className='lg';d.innerHTML=`${S.t.toFixed(1)}s <b>${a.name} → ${b.name}</b> ${raw}`;$('#pl').prepend(d);while($('#pl').children.length>80)$('#pl').lastChild.remove()}
+function step(){for(const p of S.pkts){const e=S.t-p.ss,k=p.a.id+'>'+p.b.id;
+ if(p.st==0&&e>=L){p.ss=S.t;if(S.flows.has(k)||LIVE)p.st=2;else{p.st=1;nlog(ctrl(),`PACKET_IN s1: ${p.a.ip} -> ${p.b.ip}, no flow`,'warn')}}
+ else if(p.st==1&&e>=.8){S.flows.add(k);nlog(ctrl(),`FLOW_MOD: ${p.a.id} -> ${p.b.id} installed`,'ok');p.st=2;p.ss=S.t}
+ else if(p.st==2&&e>=L){if(deliver(p))p.st=3}
+ else if(p.st==4&&e>=.6)p.st=3}
+ S.pkts=S.pkts.filter(p=>p.st!=3)}
+function deliver(p){if(LIVE){liveArrive(p);return true}const d=p.b;if(!d.alive){nlog(d,`${p.type} arrived but host is down: dropped`,'err');p.st=4;p.ss=S.t;return false}
+ ({client:cli,coord:coo,worker:wrk}[d.type])(d,p);return true}
+// LIVE: fire log + table effects only when the animated packet reaches its destination
+function liveArrive(p){const t=p.type,x=(p.pl||'').split('|'),a=p.a,b=p.b;
+ if(t==='SUBMIT'){ // arrived at COORDINATOR: always the first step of a job
+  const n=x[1];let j=S.jobs.find(j=>j.status==='sending'&&!j._arrived&&j.client===a.id&&String(j.n)===n);
+  if(!j){j={id:null,rid:null,client:a.id,n,status:'sending',worker:null,requeues:0,res:''};S.jobs.push(j)}
+  j._arrived=1;revealSubmit(j)}
+ else if(t==='ACK'){ // arrived at client (gated: only after coordinator received the job)
+  nlog(b,`[CLIENT] Coordinator accepted it -> job ID: ${x[1]}`);nlog(b,'[CLIENT] Waiting for result...')}
+ else if(t==='JOB'){ // arrived at WORKER (gated: only after coordinator received the job)
+  const id=x[1],j=jobOf(id);logReceived(id,b,x[2]);if(j){j.status='assigned';j.worker=b.wid||b.name;renderJobs()}}
+ else if(t==='RESULT'){ // arrived at coordinator (gated: only after the worker received the job)
+  const id=x[1],ans=x[2],j=jobOf(id);if(j){j.status='done';j.res=ans}
+  V(id).resulted=true;show(b,'RESULT',`${id} completed by ${a.wid||a.name}   (answer = ${ans})`,'ok');renderJobs()}
+ else if(t==='DONE'){ // arrived at client (gated: only after coordinator got the result)
+  nlog(b,`[CLIENT] RESULT for ${x[1]} = ${x[2]}`,'ok');const j=jobOf(x[1]);if(j){j.status='done';j.res=x[2];renderJobs()}}
+ else if(t==='REGISTER'){show(b,'WORKER',`${x[1]} connected from ('${a.ip}', ${a.port||'?'})`)}
+ pump()}
+const jobOf=id=>id?S.jobs.find(j=>j.id===id||j.rid===id):undefined;
+// ---- LIVE ordering. The real backend is instant, the animation is not, so every job step is
+// held until the step before it has VISUALLY finished (per job; different jobs still fly in parallel):
+//   SUBMIT lands on coordinator -> (ACK to client + JOB to worker) -> JOB lands on worker -> RESULT -> DONE
+const vis={},held=[];
+const V=id=>vis[id]||(vis[id]={submitted:false,resulted:false,recv:{}});
+// coordinator shows "New job ..." only when BOTH the packet has landed AND the real log supplied the job id
+function revealSubmit(j){if(!j._arrived||!j.rid||j.id)return;j.id=j.rid;j.status='queued';
+ const c=node(j.client);show(coord(),'CLIENT',`New job ${j.id} received from ('${c?c.ip:'?'}', ${j.rport||(c&&c.port)||'?'})   (n = ${j.n})`);
+ V(j.id).submitted=true;renderJobs();pump()}
+function logReceived(id,w,n){const v=V(id);v.recv[w.id]=(v.recv[w.id]||0)+1;
+ nlog(w,`[${w.wid||w.name}] Received ${id} (n = ${n})`);nlog(w,`[${w.wid||w.name}] Processing...`)}
+function gateOk(h){const x=h.raw.split('|'),k=x[0],id=x[1],v=vis[id];
+ if(k==='ACK'||k==='JOB')return !!(v&&v.submitted);
+ if(k==='RESULT')return !!(v&&(v.recv[h.a.id]||0)>0);
+ if(k==='DONE')return !!(v&&v.resulted);
+ return true}
+function pump(){for(let i=0;i<held.length;){const h=held[i];if(gateOk(h)||S.t-h.t>6){held.splice(i,1);release(h)}else i++}}
+const JOB_FLOW=new Set(['SUBMIT','ACK','JOB','RESULT','DONE']);
+function enqueuePkt(a,b,type,raw){held.push({a,b,type,raw,t:S.t});pump()}
+// leave-side logs happen when the packet actually starts to fly (i.e. after its gate opened)
+function release(h){const{a,b,type,raw}=h,x=raw.split('|');
+ if(type==='SUBMIT'&&a.type==='client')nlog(a,`[CLIENT] Submitting job (n = ${x[1]})`);
+ if(type==='JOB'&&a.type==='coord'){const j=jobOf(x[1]);if(j){j.status='assigned';j.worker=b.wid||b.name;renderJobs()}show(a,'SCHEDULER',`${x[1]} -> assigned to worker ${b.wid||b.name}`)}
+ if(type==='RESULT'&&a.type==='worker'){const v=V(x[1]);v.recv[a.id]=Math.max(0,(v.recv[a.id]||0)-1);nlog(a,`[${a.wid||a.name}] Finished ${x[1]} -> answer = ${x[2]}`,'ok')}
+ send(a,b,type,raw)}
+function onFlightDone(p){pump()}
+
+// ---- client: simple_client.py
+function sendJob(cid,n){const c=node(cid);if(!S.running){$('#clk').textContent='press Run first';return}if(LIVE&&!LIVE_READY){$('#clk').textContent='wait for network ready';nlog(ctrl(),'wait for "network ready" before sending jobs','warn');return}n=parseInt(n);if(!c||isNaN(n))return;if(LIVE){S.jobs.push({id:null,client:cid,n,status:'sending',worker:null,requeues:0,res:''});renderJobs();api('job',{client:cid,n}).then(r=>{if(!r.ok)nlog(c,'could not start job: '+r.error,'err')});return}
+ const j={id:null,client:cid,n,status:'sending',worker:null,wref:null,requeues:0,res:''};S.jobs.push(j);
+ nlog(c,`[CLIENT] Submitting job (n = ${n})`);send(c,coord(),'SUBMIT','SUBMIT|'+n,{ref:j});renderJobs()}
+function cli(c,p){const x=p.pl.split('|');if(x[0]=='ACK'){nlog(c,`[CLIENT] Coordinator accepted it -> job ID: ${x[1]}`);nlog(c,'[CLIENT] Waiting for result...')}
+ else if(x[0]=='DONE')nlog(c,`[CLIENT] RESULT for ${x[1]} = ${x[2]}`,'ok')}
+// ---- coordinator: simple_coordinator.py
+function coo(c,p){const C=c.st,s=p.a,x=p.pl.split('|'),w=C.workers.find(w=>w.node==s&&w.gen==p.gen);
+ if(x[0]=='REGISTER'){C.workers.push({id:x[1],node:s,busy:false,hb:S.t,gen:p.gen});show(c,'WORKER',`${x[1]} connected from ('${s.ip}', ${s.port})   (workers online: ${C.workers.length})`)}
+ else if(x[0]=='SUBMIT'){const j=p.ref;j.id='job'+(++C.cnt);j.status='queued';C.q.push(j);send(c,s,'ACK','ACK|'+j.id);show(c,'CLIENT',`New job ${j.id} received from ('${s.ip}', ${s.port})   (n = ${j.n})`)}
+ else if(x[0]=='HEARTBEAT'){if(w)w.hb=S.t}
+ else if(x[0]=='RESULT'){const j=jobOf(x[1]);if(w)w.busy=false;if(j&&j.status=='assigned'){j.status='done';j.res=x[2];show(c,'RESULT',`${j.id} completed by ${w?w.id:'?'}   (answer = ${x[2]})`,'ok');send(c,node(j.client),'DONE',`DONE|${j.id}|${x[2]}`)}}
+ else if(x[0]=='FIN')failure(c,w,'disconnected!');
+ renderJobs()}
+function failure(c,w,why){const C=c.st;if(!w||!C.workers.includes(w))return;C.workers=C.workers.filter(v=>v!=w);show(c,'FAILURE',`Worker ${w.id} ${why}`,'err');
+ S.jobs.filter(j=>j.status=='assigned'&&j.wref==w).forEach(j=>{j.status='queued (recovered)';j.worker=null;j.wref=null;j.requeues++;C.q.push(j);show(c,'RECOVERY',`${j.id} was running on ${w.id} -> put back in the queue`,'warn')});renderJobs()}
+function tick(c){if(!S.running)return;const C=c.st,T=+$('#to').value;
+ if(T>0)for(const w of C.workers.slice())if(S.t-w.hb>T){failure(c,w,`silent for ${T}s (heartbeat timeout)`);send(c,w.node,'FIN','FIN',{gen:w.gen})}
+ if(C.q.length){const w=C.workers.find(w=>!w.busy);if(w){const j=C.q.shift();w.busy=true;j.worker=w.id;j.wref=w;j.status='assigned';send(c,w.node,'JOB',`JOB|${j.id}|${j.n}`);show(c,'SCHEDULER',`${j.id} -> assigned to worker ${w.id}`)}}
+ renderJobs();at(.5,()=>tick(c))}
+// ---- worker: simple_worker.py
+function startWorker(w){w.gen++;w.alive=true;w.frozen=false;w.buf=[];w.port=rp();const g=w.gen;
+ nlog(w,`WORKER ${w.wid}`);nlog(w,'Connected to coordinator at 10.0.0.2:6000');nlog(w,'Waiting for jobs...');
+ send(w,coord(),'REGISTER','REGISTER|'+w.wid,{gen:g});
+ (function hb(){at(3,()=>{if(!S.running||!w.alive||w.gen!=g)return;if(!w.frozen)send(w,coord(),'HEARTBEAT','HEARTBEAT',{gen:g});hb()})})()}
+function wrk(w,p){if(w.frozen){w.buf.push(p);return}const x=p.pl.split('|');
+ if(x[0]=='FIN'){nlog(w,'Lost connection to coordinator. Exiting.','err');w.alive=false;build();return}
+ if(x[0]=='JOB'){const id=x[1],g=w.gen;nlog(w,`[${w.wid}] Received ${id} (n = ${x[2]})`);nlog(w,`[${w.wid}] Processing...`);
+  const lo=Math.min(w.min,w.max),hi=Math.max(w.min,w.max),d=lo+Math.floor(Math.random()*(hi-lo+1));
+  const fin=()=>{if(!w.alive||w.gen!=g)return;if(w.frozen){w.pend=fin;return}const n=parseInt(x[2]),a=n*n;send(w,p.a,'RESULT',`RESULT|${id}|${a}`,{gen:g});nlog(w,`[${w.wid}] Finished ${id} -> answer = ${a}`,'ok')};
+  w.timer=at(d,fin)}}
+// ---- rendering
+function renderJobs(){$('#jt').innerHTML='<tr><th>job</th><th>client</th><th>n</th><th>status</th><th>worker</th><th>requeues</th><th>answer</th></tr>'+S.jobs.slice().reverse().map(j=>`<tr><td>${j.id||'...'}</td><td>${node(j.client)?node(j.client).name:'-'}</td><td>${j.n}</td><td>${j.status}</td><td>${j.worker||'-'}</td><td>${j.requeues}</td><td>${j.res}</td></tr>`).join('')}
+function lane(p,x0,y0,x1,y1){const dx=x1-x0,dy=y1-y0,d=Math.hypot(dx,dy)||1,o=((p.id%7)-3)*13;return[-dy/d*o,dx/d*o]}
+function pos(p){const A=anc(p.a),B=anc(p.b),k=Math.min(1,(S.t-p.ss)/L);
+ if(p.st==0){const[ox,oy]=lane(p,A.x,A.y,sw.x,sw.y);return[A.x+(sw.x-A.x)*k+ox,A.y+(sw.y-A.y)*k+oy]}if(p.st==2){const[ox,oy]=lane(p,sw.x,sw.y,B.x,B.y);return[sw.x+(B.x-sw.x)*k+ox,sw.y+(B.y-sw.y)*k+oy]}if(p.st==4)return[B.x,B.y];return[sw.x,sw.y+40+(p.id%3)*22]}
+function draw(){let s='';const k=anc(ctrl());
+ for(const p of S.pkts){const[x,y]=pos(p),w=p.label.length*6.2+14,dead=p.st==4,c=dead?'#dc2626':COL[p.type];
+  if(p.st==1){const e=Math.min(1,(S.t-p.ss)/.8),t=e<.5?e*2:2-e*2,cx=sw.x+(k.x-sw.x)*t,cy=sw.y+(k.y-sw.y)*t;s+=`<circle cx="${cx}" cy="${cy}" r="6" fill="#94a3b8"/><text x="${cx+10}" y="${cy+3}" font-size="9" fill="var(--mut)">${e<.5?'PACKET_IN':'FLOW_MOD'}</text>`}
+  s+=`<g opacity="${dead?1-(S.t-p.ss)/.6:1}"><rect x="${x-w/2}" y="${y-10}" width="${w}" height="20" rx="10" fill="${c}"/><text x="${x}" y="${y+4}" text-anchor="middle" font-size="10" font-family="JetBrains Mono,monospace" fill="#fff">${dead?'DROPPED ✕':p.label}</text></g>`}
+ $('#pk').innerHTML=s}
+let last=performance.now();
+(function frame(now){const dt=Math.min(.1,(now-last)/1000);last=now;if(S.running&&!paused){S.t+=dt*speed;runTimers();step();if(LIVE)pump();$('#clk').textContent='t = '+S.t.toFixed(1)+'s'}draw();requestAnimationFrame(frame)})(last);
+// ---- controls
+function simRun(){fresh();for(const k of Object.keys(vis))delete vis[k];S.running=true;nodes.forEach(n=>{n.alive=true;n.frozen=false;n.log=[];n.timer=null;n.buf=[];n.pend=null;n.port=rp();if(n.type=='coord')n.st={workers:[],q:[],cnt:0}});$('#pl').innerHTML='';build();
+ $('#run').textContent='Stop';$('#run').classList.add('on');
+ nlog(ctrl(),'Ryu listening on 127.0.0.1:6633');nlog(ctrl(),'Switch connected! (s1, OpenFlow 1.3, table-miss -> controller)');
+ nlog(coord(),'JOB QUEUE COORDINATOR');nlog(coord(),'Listening on port 6000');nodes.filter(n=>n.type=='client').forEach(c=>nlog(c,'JOB CLIENT ready'));
+ at(.5,()=>tick(coord()));nodes.filter(n=>n.type=='worker').forEach((w,i)=>at(.4+i*.4,()=>startWorker(w)))}
+function stop(){if(LIVE)api('stop',{});S.running=false;LIVE_READY=false;S.pkts=[];held.length=0;for(const k of Object.keys(vis))delete vis[k];$('#run').textContent='Run';$('#run').classList.remove('on');$('#clk').textContent='stopped';build()}
+const api=(p,d)=>fetch('/api/'+p,{method:'POST',body:JSON.stringify(d)}).then(r=>r.json()).catch(e=>({ok:false,error:String(e)}));
+const nd=n=>({host:n.id,type:n.type,ip:n.ip,wid:n.wid});
+async function liveRun(){fresh();held.length=0;for(const k of Object.keys(vis))delete vis[k];S.running=true;LIVE_READY=false;nodes.forEach(n=>{n.alive=true;n.frozen=false;n.log=[]});$('#pl').innerHTML='';build();$('#run').textContent='Stop';$('#run').classList.add('on');
+ nlog(ctrl(),'starting Ryu + Mininet + your scripts (about 6s)... wait for "network ready" before sending jobs','warn');
+ const r=await api('run',{nodes:nodes.filter(n=>n.type!='ctrl').map(nd)});if(!r.ok)nlog(ctrl(),'backend error: '+r.error,'err')}
+const run=()=>LIVE?liveRun():simRun();
+$('#run').onclick=()=>S.running?stop():run();
+$('#pause').onclick=e=>{paused=!paused;e.target.textContent=paused?'Resume':'Pause'};
+$('#spd').oninput=e=>{speed=+e.target.value;$('#spv').textContent=speed+'×'};
+$('#ac').onclick=()=>{const n=mk('client','Client '+(nodes.filter(x=>x.type=='client').length+1));nodes.push(n);build();if(LIVE){if(S.running)api('add',nd(n))}else if(S.running)nlog(n,'JOB CLIENT ready')};
+$('#aw').onclick=()=>{const n=mk('worker','Worker '+(nodes.filter(x=>x.type=='worker').length+1));nodes.push(n);build();if(LIVE){if(S.running)api('add',nd(n))}else if(S.running)at(.2,()=>startWorker(n))};
+$('#send').onclick=()=>sendJob($('#jc').value,$('#jn').value);
+$('#burst').onclick=()=>{const cs=nodes.filter(n=>n.type=='client');if(!cs.length)return;for(let i=0;i<5;i++)at(LIVE?0:i*.5,()=>sendJob(cs[Math.floor(Math.random()*cs.length)].id,1+Math.floor(Math.random()*50)))};
+$('#cards').onclick=e=>{const b=e.target.closest('button[data-a]');if(!b)return;const n=node(b.dataset.i),a=b.dataset.a;
+ if(LIVE){if(a=='rm'){api('remove',{host:n.id});nodes=nodes.filter(x=>x!=n);build()}else if(a=='frz')api('freeze',{host:n.id});else api(n.alive?'kill':'revive',{host:n.id});return}
+ if(a=='rm'){if(n.alive&&n.type=='worker'&&S.running)send(n,coord(),'FIN','FIN',{gen:n.gen});n.alive=false;nodes=nodes.filter(x=>x!=n)}
+ else if(a=='kill'){if(n.alive){n.alive=false;n.frozen=false;if(n.timer)n.timer.x=1;nlog(n,'^C process killed','err');send(n,coord(),'FIN','FIN',{gen:n.gen})}else if(S.running)startWorker(n)}
+ else if(a=='frz'){n.frozen=!n.frozen;nlog(n,n.frozen?'process frozen (hung, no heartbeats)':'process resumed',n.frozen?'warn':'ok');
+  if(!n.frozen){const b2=n.buf.splice(0);if(n.pend){const f=n.pend;n.pend=null;f()}b2.forEach(q=>{if(n.alive)wrk(n,q)})}}
+ build()};
+$('#cards').onchange=e=>{const t=e.target,n=node(t.dataset.i);if(t.dataset.a=='mn')n.min=Math.max(0,+t.value||0);if(t.dataset.a=='mx')n.max=Math.max(0,+t.value||0)};
+function liveJobs(m){let r,j;
+ if(r=m.match(/New job (job\d+) received from \('([\d.]+)'.*n = (-?\d+)/)){const c=nodes.find(n=>n.ip==r[2]),pm=m.match(/\('[\d.]+',\s*(\d+)/);
+  j=S.jobs.find(x=>x.status==='sending'&&!x.rid&&(!c||x.client==c.id)&&String(x.n)==r[3]);
+  if(!j){j={id:null,client:c?c.id:'',n:r[3],status:'sending',worker:null,requeues:0,res:''};S.jobs.push(j)}
+  j.rid=r[1];if(pm)j.rport=pm[1];revealSubmit(j)} // shown only once the SUBMIT packet has landed
+ else if((r=m.match(/(job\d+) was running/))&&(j=jobOf(r[1]))){j.status='queued (recovered)';j.worker=null;j.requeues++}
+ renderJobs()}
+fetch('/api/ping').then(r=>r.json()).then(j=>{if(!j.ok)return;LIVE=true;L=.5;$('#mode').textContent='LIVE: real Mininet + Ryu + tcp_socket';$('#to').disabled=true;
+ const es=new EventSource('/events');es.onmessage=e=>{const m=JSON.parse(e.data);
+  if(m.type=='log'){const n=node(m.host);if(!n)return;const line=m.line||'';
+   // Job-flow lines are shown only when their packet animation arrives (liveArrive).
+   // Still run liveJobs so the table stays roughly in sync; visual logs are deferred.
+   const defer=/Submitting job|New job .* received|Coordinator accepted|Waiting for result|\[\w+\] Received |Processing\.\.\.|Finished .* answer|completed by|RESULT for|assigned to worker/.test(line);
+   if(n.type=='coord')liveJobs(line);
+   if(defer)return; // visual log will appear from liveArrive / pkt-start
+   const isErr=/FAILURE|Lost|Error|Traceback|Errno|WARNING|giving up|failed/.test(line),isRec=/RECOVERY/.test(line);
+   nlog(n,line,isErr?'err':isRec?'warn':/RESULT|accepted|Finished/.test(line)?'ok':'')}
+  else if(m.type=='pkt'){const a=nodes.find(n=>n.ip==m.src),b=nodes.find(n=>n.ip==m.dst);if(!a||!b||!S.running)return;let t=m.label.split('|')[0];
+   if(t=='SYN'||t=='FIN'||t=='RST')return; // skip TCP control
+   // Job-flow packets are gated per job (see enqueuePkt) so the visual order is always client→coordinator→worker→coordinator→client
+   enqueuePkt(a,b,COL[t]?t:'ACK',m.label)}
+  else if(m.type=='state'){const n=node(m.host);if(n){n.alive=m.alive;n.frozen=!!m.frozen;build()}}
+  else if(m.type=='ready'){LIVE_READY=true;S.running=true;$('#run').textContent='Stop';$('#run').classList.add('on');nlog(ctrl(),'network ready — you can send jobs now','ok');build()}
+  else if(m.type=='stopped'){S.running=false;LIVE_READY=false;S.pkts=[];held.length=0;for(const k of Object.keys(vis))delete vis[k];$('#run').textContent='Run';$('#run').classList.remove('on');build()}}}).catch(()=>{});
+build();
+</script></body></html>
