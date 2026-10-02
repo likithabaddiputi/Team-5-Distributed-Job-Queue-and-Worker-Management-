@@ -4,7 +4,7 @@ import time
 import sys
 import random
 
-COORDINATOR_HOST = '127.0.0.1'
+COORDINATOR_HOST = '10.0.0.2'
 COORDINATOR_PORT = 6000
 
 JOB_TIME_MIN = 2
