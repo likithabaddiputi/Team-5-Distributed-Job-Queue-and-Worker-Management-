@@ -1,14 +1,4 @@
 #!/usr/bin/env python3
-"""
-GUI bridge: runs your REAL Mininet topology, Ryu controller and tcp_socket scripts,
-and streams their output + the real packets to jobqueue-sdn-ui.html.
-
-Put this file and jobqueue-sdn-ui.html next to controller.py and tcp_socket/, then:
-
-    sudo python3 backend.py --ryu "/home/<you>/ryu-env/bin/ryu-manager controller.py"
-
-and open http://localhost:8000 in a browser. (sudo is needed by Mininet and tcpdump.)
-"""
 import argparse, json, os, queue, shlex, signal, socket, struct, subprocess, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
