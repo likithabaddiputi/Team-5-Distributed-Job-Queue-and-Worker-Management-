@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""
-Socket-layer tests (no Mininet / Ryu needed). Runs coordinator, workers and clients on
-127.0.0.1 and plays the role of the Ryu controller on the UNIX-socket channel.
-
-    python3 tests/test_sockets.py          (from the project root)
-"""
 import os
 import shutil
 import socket
