@@ -1,12 +1,4 @@
 #!/usr/bin/env python3
-"""
-End-to-end test in the REAL environment: Mininet + Open vSwitch + Ryu + the tcp_socket scripts.
-
-  Terminal 1:  cd ~/sdn-project && ryu-manager controller.py
-  Terminal 2:  cd ~/sdn-project && sudo python3 tests/test_mininet.py
-
-Prints PASS/FAIL per check and exits non-zero if any check fails.
-"""
 import os
 import re
 import subprocess
