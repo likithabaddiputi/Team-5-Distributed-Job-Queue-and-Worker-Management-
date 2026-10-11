@@ -1,7 +1,15 @@
+import os
+import time
+
 from mininet.net import Mininet
 from mininet.node import RemoteController, OVSSwitch
 from mininet.cli import CLI
 from mininet.log import setLogLevel
+
+# Folder containing simple_coordinator.py, simple_worker.py, simple_client.py
+SCRIPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tcp_socket')
+
+LOG_DIR = '/tmp/sdn_logs'
 
 
 def create_topology():
@@ -49,8 +57,34 @@ def create_topology():
     print("c0 = Ryu Controller = 127.0.0.1:6633")
     print()
 
-    CLI(net)
+    # ---- Auto-launch coordinator + workers in the background ----
+    os.makedirs(LOG_DIR, exist_ok=True)
 
+    print("*** Starting coordinator on h2 (log: %s/coord.log) ***" % LOG_DIR)
+    h2.cmd('python3 -u %s/simple_coordinator.py > %s/coord.log 2>&1 &' % (SCRIPTS, LOG_DIR))
+    time.sleep(1)
+
+    print("*** Starting worker w1 on h3 (log: %s/w1.log) ***" % LOG_DIR)
+    h3.cmd('python3 -u %s/simple_worker.py w1 > %s/w1.log 2>&1 &' % (SCRIPTS, LOG_DIR))
+    time.sleep(0.5)
+
+    print("*** Starting worker w2 on h4 (log: %s/w2.log) ***" % LOG_DIR)
+    h4.cmd('python3 -u %s/simple_worker.py w2 > %s/w2.log 2>&1 &' % (SCRIPTS, LOG_DIR))
+    time.sleep(0.5)
+
+    print()
+    print("*** Everything is running in the background. ***")
+    print("    Watch any of them live with, e.g.:")
+    print("        tail -f %s/coord.log" % LOG_DIR)
+    print("        tail -f %s/w1.log" % LOG_DIR)
+    print("        tail -f %s/w2.log" % LOG_DIR)
+    print()
+    print("*** To submit a job, either:")
+    print("    - type it right here:  mininet> h1 python3 %s/simple_client.py 7" % SCRIPTS)
+    print("    - or open a client xterm:  mininet> xterm h1")
+    print()
+
+    CLI(net)
     net.stop()
 
 
