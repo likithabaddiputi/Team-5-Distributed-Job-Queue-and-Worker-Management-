@@ -1,5 +1,6 @@
 # Distributed Job Queue and Worker Management over SDN
 **Project 3 — SDN + Socket Programming (Jackfruit Mini Project)** · TCP sockets · Mininet · Ryu (OpenFlow 1.3)
+**D2 update:** redundant two-switch backbone with automatic SDN rerouting, plus a performance evaluation harness. See §4b and §8.
 
 ## 1. Problem and objectives
 Clients submit jobs over TCP; a coordinator queues them and hands them to worker nodes.
@@ -14,34 +15,40 @@ The SDN controller **watches the coordinator↔worker traffic** and **reacts to 
 | Monitor worker/network load | Ryu polls OpenFlow flow stats every 2 s, sends `LOAD` to the coordinator |
 | Dynamically control SDN paths | Ryu installs/removes per-worker flows (own cookie) when a worker joins/leaves |
 | Redistribute jobs on failure | worker disconnect, heartbeat timeout **or** SDN `LINK_DOWN` → its jobs are re-queued |
+| **(D2)** Path rerouting | two switches joined by a **redundant link pair**; Ryu reroutes onto the backup link when the primary backbone link fails, with the app layer never noticing |
+| **(D2)** Performance evaluation | `tests/test_performance.py` — throughput, scheduler balance, failover recovery time |
 
 ## 2. Architecture
 ```
                  Ryu controller (controller.py)  127.0.0.1:6633
                    |  OpenFlow 1.3        \  UNIX socket /tmp/sdn_ctl.sock
                    |                       \  (app <-> SDN channel)
-        h1 Client --+                        \
+        h1 Client ---+                        \
         h2 Coordinator (simple_coordinator.py :6000)
-        h3 Worker w1   +-- s1 (Open vSwitch) --+
-        h4 Worker w2
+                      +-- s1 --===primary===-- s2 --+-- h3 Worker w1
+                      |        ===backup====         |-- h4 Worker w2
 ```
-| Node | Role | IP |
-|---|---|---|
-| h1 | Client (`simple_client.py`) | 10.0.0.1 |
-| h2 | Coordinator (`simple_coordinator.py`, TCP 6000) | 10.0.0.2 |
-| h3 / h4 | Workers `w1` / `w2` (`simple_worker.py`) | 10.0.0.3 / 10.0.0.4 |
-| s1 | Open vSwitch, OpenFlow 1.3 | — |
-| c0 | Ryu remote controller | 127.0.0.1:6633 |
+| Node | Role | IP | Switch |
+|---|---|---|---|
+| h1 | Client (`simple_client.py`) | 10.0.0.1 | s1 |
+| h2 | Coordinator (`simple_coordinator.py`, TCP 6000) | 10.0.0.2 | s1 |
+| h3 / h4 | Workers `w1` / `w2` (`simple_worker.py`) | 10.0.0.3 / 10.0.0.4 | s2 |
+| s1, s2 | Open vSwitch, OpenFlow 1.3, joined by **two** links (primary + backup) | — | — |
+| c0 | Ryu remote controller | 127.0.0.1:6633 | — |
+
+Port numbering is fixed by the order links are added in `topology.py`/`backend.py` and relied on by `controller.py`:
+`port 1` = first host, `port 2` = second host, `port 3` = primary inter-switch link, `port 4` = backup inter-switch link (same on both s1 and s2).
 
 ### Files
 | File | Purpose |
 |---|---|
-| `topology.py` | Mininet topology (1 switch, 4 hosts, remote controller) |
-| `controller.py` | Ryu app: learning switch + app-specific flows + stats + port-status + app channel |
-| `tcp_socket/` | coordinator, worker, client (plain `socket` module) |
-| `backend.py`, `jobqueue-sdn-ui.html` | optional GUI that runs the **real** stack and visualises it |
-| `tests/test_sockets.py` | automated socket tests (no Mininet needed) |
-| `tests/test_mininet.py` | automated end-to-end test in Mininet + Ryu |
+| `topology.py` | Mininet topology — **D2: two switches (s1, s2) + redundant backbone link** |
+| `controller.py` | Ryu app: learning switch (loop-free flood across the redundant links) + app-specific flows + stats + port-status + app channel + **D2: backbone failover/failback logic** |
+| `tcp_socket/` | coordinator, worker, client (plain `socket` module) — **unchanged from D1** |
+| `backend.py`, `jobqueue-sdn-ui.html` | GUI that runs the **real** stack and visualises it — **D2: two-switch layout + "Toggle backbone link" button** |
+| `tests/test_sockets.py` | automated socket tests (no Mininet needed) — unchanged |
+| `tests/test_mininet.py` | automated end-to-end test in Mininet + Ryu — **D2: added backbone-failure/reroute checks** |
+| `tests/test_performance.py` | **D2 (new):** throughput, scheduling balance, and failover-time measurements |
 
 ## 3. Message protocol (newline-terminated text over TCP :6000)
 | Message | Direction | Meaning |
@@ -65,12 +72,23 @@ The SDN controller **watches the coordinator↔worker traffic** and **reacts to 
 | `LINK_DOWN\|id` | SDN → app | from OFPT_PORT_STATUS; coordinator fails the worker and re-queues its jobs |
 
 ## 4. SDN behaviour
-* **Table-miss** → controller; **learning switch** at priority 1 (also records IP → port).
-* **Application flows** (priority 10, TCP `:6000`, coordinator↔worker, both directions) are installed when `WORKER_UP` arrives. Each worker has its **own cookie**, so its flow byte-counters equal that worker's load. They are deleted by cookie on `WORKER_DOWN` / link down.
+* **Table-miss** → controller; **learning switch** at priority 1 (also records IP → port). Flooding is restricted to exclude whichever inter-switch link is currently inactive, so the two parallel s1↔s2 links never form a loop (a minimal stand-in for spanning-tree / active-backup blocking).
+* **Application flows** (priority 10, TCP `:6000`, coordinator↔worker, both directions) are installed when `WORKER_UP` arrives. Each worker has its **own cookie**, so its flow byte-counters equal that worker's load. They are deleted by cookie on `WORKER_DOWN` / link down. These flows work unmodified across the two switches: `ip_to_port[dpid]` naturally learns the inter-switch port as "where that remote IP lives" for a cross-switch host.
 * **Stats loop** every 2 s: `OFPFlowStatsRequest` → bytes/s per worker → `LOAD`.
   Note: the measured bytes are all coordinator↔worker TCP traffic (jobs, results **and heartbeats**), i.e. a proxy for worker activity.
-* **Failure path:** `ip link down` on a worker port → OVS `PORT_STATUS` → Ryu → `LINK_DOWN|wid` → coordinator closes that worker and re-queues its jobs.
-* Current topology has **one switch**, so there is no alternate path; path *rerouting* is the planned D2 extension (second switch + redundant link, reroute flows on `LINK_DOWN`).
+* **Worker-failure path (unchanged from D1):** `ip link down` on a worker's own port → OVS `PORT_STATUS` → Ryu → `LINK_DOWN|wid` → coordinator closes that worker and re-queues its jobs.
+
+## 4b. D2 — path rerouting over the redundant backbone
+* Topology now has **two switches**, `s1` (client + coordinator) and `s2` (both workers), joined by **two parallel links**: a primary (port 3 on each side) and a backup (port 4).
+* All job traffic between the coordinator and a worker therefore crosses the backbone — this is what makes rerouting observable, not just theoretical.
+* `controller.py` tracks `self.active_inter_port` (starts as the primary). On `EventOFPPortStatus` for the **primary backbone port** going down, it:
+  1. Flips the active link to the backup port.
+  2. Flushes every flow entry on `s1`/`s2` that was still forwarding out the dead port (both the learning-switch entries and the per-worker application flows).
+  3. Forgets everything that was learned via the dead port (`mac_to_port`, `ip_to_port`), so the next packet re-learns the path over the backup link.
+  4. Marks every worker's application flows as needing reinstall; the existing stats-loop retry logic reinstalls them automatically once ports are relearned.
+* The same logic fails back to the primary link automatically once Ryu sees it come back up (`PORT_STATUS` with `down=False`).
+* **Crucially, none of this touches the app ↔ SDN channel.** The coordinator is never told `WORKER_DOWN` or `LINK_DOWN` for a backbone failure — jobs keep completing exactly as before, just over a different physical path. The worker-link failure path (§4) is completely separate and still goes through the app channel as before.
+* **Gotcha to know for the viva:** Mininet's `net.configLinkStatus('s1','s2', ...)` (and the CLI's `link s1 s2 down`) affects *every* link between two nodes at once — with two parallel links that kills both simultaneously and leaves nothing to fail over to. `topology.py`, `backend.py` and `tests/test_mininet.py` all therefore reference the **primary link object directly** (`net.primary_link.intf1/intf2.ifconfig(...)`) instead.
 
 ## 5. How to run
 **Prerequisites:** Ubuntu VM, Mininet, Open vSwitch, Ryu (`~/ryu-env`), Python 3, `tcpdump` (GUI only).
@@ -90,18 +108,29 @@ h1# python3 tcp_socket/simple_client.py 7        # prints  RESULT for job1 = 49
 ```
 Inspect the SDN state: `sudo ovs-ofctl -O OpenFlow13 dump-flows s1` (look for `cookie=0x1`, `tp_src=6000`).
 
+**D2 — demo backbone rerouting manually:**
+```
+mininet> py net.primary_link.intf1.ifconfig("down"); net.primary_link.intf2.ifconfig("down")
+# submit a job from h1 — it still completes; check Ryu's terminal for [D2-REROUTE] lines
+# ovs-ofctl -O OpenFlow13 dump-flows s1   -> flows now show output:4 (backup), not output:3
+mininet> py net.primary_link.intf1.ifconfig("up"); net.primary_link.intf2.ifconfig("up")
+# Ryu fails back automatically; flows return to output:3
+```
+Do **not** use `mininet> link s1 s2 down` for this — see the gotcha in §4b.
+
 ### Option B — GUI (runs the same real stack)
 ```bash
 cd ~/sdn-project && sudo python3 backend.py --ryu "$HOME/ryu-env/bin/ryu-manager controller.py"
 # open http://localhost:8000 — header must say "LIVE: real Mininet + Ryu + tcp_socket"
 # (if it says "simulation", the backend is not running)
 ```
-Wait for **network ready** (~6 s), then use *Send job*, *Kill*, *Freeze* and **Link down** on a worker.
+Wait for **network ready** (~6 s), then use *Send job*, *Kill*, *Freeze*, **Link down** on a worker, and the new **Backbone link** button to demo D2 rerouting live.
 
 ## 6. Tests
 ```bash
 python3 tests/test_sockets.py                     # 8 socket tests, ~25 s, no root, no Mininet
-sudo python3 tests/test_mininet.py                # end-to-end (Ryu must already be running)
+sudo python3 tests/test_mininet.py                 # end-to-end (Ryu must already be running)
+python3 tests/test_performance.py                  # D2: throughput / balance / failover timing, no root needed
 ```
 | # | Scenario | Expected | Test |
 |---|---|---|---|
@@ -113,11 +142,13 @@ sudo python3 tests/test_mininet.py                # end-to-end (Ryu must already
 | T6 | Worker killed mid-job | job re-queued, client still gets the answer | `test_killed_worker…` |
 | T7 | SDN `LINK_DOWN` | worker failed, job re-run elsewhere | `test_sdn_link_down…` |
 | T8 | Worker keeps dying | job failed after 3 attempts (`too_many_worker_failures`) | `test_worker_that_always_dies…` |
-| M1–M8 | Mininet: pingAll, flows installed, job result, non-zero `LOAD`, `link s1 h3 down` → failover, bad input | see `tests/test_mininet.py` | end-to-end |
+| M1–M8 | Mininet: pingAll (2 switches), flows installed, job result, non-zero `LOAD`, worker-link-down → failover, bad input | see `tests/test_mininet.py` | end-to-end |
+| **M9–M12 (D2)** | **Primary backbone down → job still completes; no `WORKER_DOWN`/`LINK_DOWN` sent to app; flows move to backup port; backbone restored → job still completes** | see `tests/test_mininet.py` | end-to-end |
+| **P1–P2 (D2)** | **Throughput at 1/3/6/10 concurrent clients; scheduler balance; worker-kill failover timing** | printed report + `/tmp/sdn_perf_report.json` | `tests/test_performance.py` |
 
-Manual SDN-failure demo (Option A): `mininet> link s1 h3 down` → coordinator prints `controller reports the link to w1 is DOWN`, then `FAILURE` / `RECOVERY`.
+Manual SDN-failure demo (Option A): `mininet> link s2 h3 down` → coordinator prints `controller reports the link to w1 is DOWN`, then `FAILURE` / `RECOVERY`. For the **backbone** failure demo instead, see §4b / §5.
 
-## 7. Limitations / planned work (D2)
-* One switch → no alternate path yet (add `s2` + redundant link and reroute on `LINK_DOWN`).
-* Jobs are `n → n²` with a simulated 2–8 s delay; the coordinator is a single point of failure.
-* Performance evaluation (throughput, recovery time, static vs. load-aware scheduling) is D2.
+## 7. Limitations / remaining work
+* Backbone failover currently assumes a fixed, known port layout (`PRIMARY_PORT`/`BACKUP_PORT` constants in `controller.py`) rather than general topology discovery (`ryu.topology.api` / LLDP) — fine for this fixed two-switch lab topology, but wouldn't generalize to an arbitrary mesh without extension.
+* Jobs are `n → n²` with a simulated delay; the coordinator itself is still a single point of failure (not addressed by this project).
+* Flood-based loop avoidance on the redundant links is a minimal active/backup block, not a full spanning-tree protocol.
