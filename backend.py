@@ -1,4 +1,21 @@
 #!/usr/bin/env python3
+"""
+GUI bridge: runs your REAL Mininet topology, Ryu controller and tcp_socket scripts,
+and streams their output + the real packets to jobqueue-sdn-ui.html.
+
+Put this file and jobqueue-sdn-ui.html next to controller.py and tcp_socket/, then:
+
+    sudo python3 backend.py --ryu "/home/<you>/ryu-env/bin/ryu-manager controller.py"
+
+and open http://localhost:8000 in a browser. (sudo is needed by Mininet and tcpdump.)
+
+D2: the topology is now two switches (s1 with h1/h2, s2 with h3/h4) joined by a
+redundant pair of links. A worker's own host link can still be toggled with the
+existing "Link down" button on its card (do_link); a new "Toggle backbone link"
+action (do_link_backbone) brings down/up only the PRIMARY inter-switch link so
+you can demo Ryu rerouting traffic onto the backup link without ever telling the
+coordinator anything went wrong.
+"""
 import argparse, json, os, queue, shlex, signal, socket, struct, subprocess, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -67,9 +84,11 @@ def hard_cleanup(log=lambda m: None):
             log('removed stale interface ' + name)
     except Exception as e:
         log('interface cleanup: ' + str(e))
-    # leftover OVS bridge / controller / tcpdump from earlier runs
+    # leftover OVS bridges / controller / tcpdump from earlier runs
     kill_old_ryu()
-    for cmd in (['ovs-vsctl', '--if-exists', 'del-br', 's1'], ['pkill', '-x', 'tcpdump']):
+    for cmd in (['ovs-vsctl', '--if-exists', 'del-br', 's1'],
+                ['ovs-vsctl', '--if-exists', 'del-br', 's2'],
+                ['pkill', '-x', 'tcpdump']):
         try:
             subprocess.run(cmd, stdout=PIPE, stderr=PIPE)
         except Exception:
@@ -80,6 +99,8 @@ def hard_cleanup(log=lambda m: None):
 class Bridge:
     def __init__(self, args):
         self.a, self.subs, self.net, self.sw = args, [], None, None
+        self.sw2 = None                      # D2: second switch
+        self.backbone_down = False           # D2: primary inter-switch link state
         self.procs, self.info, self.frozen, self.linkdown = {}, {}, set(), set()
         self.ctl = self.dump = None
         self.starting = False
@@ -138,21 +159,29 @@ class Bridge:
         self.pipe('c0', self.ctl)
         self.emit(type='log', host='c0', line='waiting 3s for Ryu to listen on :6633...')
         time.sleep(3)
-        self.emit(type='log', host='c0', line='building Mininet topology (s1 + hosts)...')
+        self.emit(type='log', host='c0', line='building Mininet topology (s1 + s2, redundant backbone)...')
         net = Mininet(controller=None, switch=OVSSwitch, autoSetMacs=True)
         net.addController('c0', controller=RemoteController, ip='127.0.0.1', port=6633)
+        # D2: two switches. Hosts flagged 'coord'/'client' go on s1, 'worker' on s2,
+        # matching the fixed port layout controller.py expects (ports 1,2 = hosts,
+        # port 3 = primary backbone, port 4 = backup backbone, on both switches).
         self.sw = net.addSwitch('s1', protocols='OpenFlow13')
+        self.sw2 = net.addSwitch('s2', protocols='OpenFlow13')
         self.info = {}
         for n in nodes:
+            target = self.sw2 if n['type'] == 'worker' else self.sw
             h = net.addHost(n['host'], ip=n['ip'] + '/24')
-            link = net.addLink(h, self.sw)
+            link = net.addLink(h, target)
             self.info[n['host']] = dict(n, iface=link.intf2.name)
+        self.primary_link = net.addLink(self.sw, self.sw2)   # port 3 on each
+        self.backup_link = net.addLink(self.sw, self.sw2)    # port 4 on each
+        self.backbone_down = False
         net.start()
         self.net = net
-        self.emit(type='log', host='c0', line='Mininet started, waiting for switch to connect...')
+        self.emit(type='log', host='c0', line='Mininet started, waiting for switches to connect...')
         try:
             net.waitConnected()
-            self.emit(type='log', host='c0', line='switch connected to Ryu')
+            self.emit(type='log', host='c0', line='switches connected to Ryu')
         except Exception as e:
             self.emit(type='log', host='c0', line='waitConnected: ' + str(e) + ' (continuing)')
             time.sleep(2)
@@ -184,8 +213,9 @@ class Bridge:
         self.emit(type='ready')
 
     def launch(self, n):
-        script = {'coord': 'simple_coordinator.py', 'worker': 'simple_worker.py'}[n['type']]
-        cmd = ['python3', '-u', os.path.join(self.a.scripts, script)]
+        cmd = ['python3', '-u']
+        cmd.append(os.path.join(self.a.scripts,
+                                'simple_coordinator.py' if n['type'] == 'coord' else 'simple_worker.py'))
         if n['type'] == 'worker':
             cmd.append(n['wid'])
         p = self.net.get(n['host']).popen(cmd, stdout=PIPE, stderr=STDOUT, text=True)
@@ -207,6 +237,7 @@ class Bridge:
             except Exception:
                 pass
         self.net, self.procs, self.info = None, {}, {}
+        self.sw2, self.backbone_down = None, False
         self.frozen, self.linkdown = set(), set()
         self.seen = {}
         if not silent:
@@ -274,14 +305,36 @@ class Bridge:
         self.emit(type='state', host=h, alive=True, frozen=h in self.frozen)
 
     def do_link(self, b):
-        # Toggle the s1<->host link. OVS reports PORT_STATUS to Ryu, which tells the coordinator (LINK_DOWN).
+        # Toggle a HOST's own link to its switch (s1 for client/coord, s2 for
+        # workers). OVS reports PORT_STATUS to Ryu, which tells the coordinator
+        # (LINK_DOWN) -- unchanged from D1, just targets whichever switch the
+        # host is actually on now.
         h = self.host(b)
         if not self.net:
             raise RuntimeError('network not running')
+        switch = self.sw2 if self.info[h]['type'] == 'worker' else self.sw
         down = h not in self.linkdown
-        self.net.configLinkStatus('s1', h, 'down' if down else 'up')
+        self.net.configLinkStatus(switch.name, h, 'down' if down else 'up')
         (self.linkdown.add if down else self.linkdown.discard)(h)
         self.emit(type='link', host=h, down=down)
+
+    def do_link_backbone(self, b):
+        # D2: bring down (or restore) ONLY the primary s1<->s2 link, leaving
+        # the backup link intact. We must NOT use net.configLinkStatus('s1',
+        # 's2', ...) here -- with two parallel links it would toggle BOTH of
+        # them at once and there would be nothing left to fail over to. So we
+        # go straight to the specific link object's two interfaces instead.
+        if not self.net or not getattr(self, 'primary_link', None):
+            raise RuntimeError('network not running')
+        want_down = not self.backbone_down
+        status = 'down' if want_down else 'up'
+        self.primary_link.intf1.ifconfig(status)
+        self.primary_link.intf2.ifconfig(status)
+        self.backbone_down = want_down
+        self.emit(type='log', host='c0',
+                  line='[D2] primary inter-switch link manually set ' + status.upper() +
+                       ' (backup link untouched) -- watch the Ryu card for [D2-REROUTE]')
+        self.emit(type='backbone', down=want_down)
 
     def do_revive(self, b):
         self.launch(self.info[self.host(b)])
@@ -291,9 +344,10 @@ class Bridge:
         self.procs.pop(b['host'], None)
 
     def do_add(self, b):                       # add a client/worker while the network is running
+        target = self.sw2 if b['type'] == 'worker' else self.sw
         h = self.net.addHost(b['host'], ip=b['ip'] + '/24')
-        link = self.net.addLink(h, self.sw)
-        self.sw.attach(link.intf2)
+        link = self.net.addLink(h, target)
+        target.attach(link.intf2)
         link.intf1.setIP(b['ip'], 24)
         link.intf1.ifconfig('up')
         link.intf2.ifconfig('up')

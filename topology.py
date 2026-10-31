@@ -11,6 +11,17 @@ SCRIPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tcp_socket')
 
 LOG_DIR = '/tmp/sdn_logs'
 
+# D2: two switches joined by a redundant pair of links, instead of the D1
+# single-switch layout. h1 (client) and h2 (coordinator) sit behind s1;
+# h3/h4 (workers) sit behind s2, so every job's TCP traffic now has to
+# cross the s1<->s2 backbone, which is exactly what makes rerouting on
+# link failure a real, observable thing (controller.py handles the
+# failover logic; see PRIMARY_PORT/BACKUP_PORT there).
+#
+# Link-add order fixes the port numbers the controller relies on:
+#   s1: port1->h1, port2->h2, port3->primary(s1-s2), port4->backup(s1-s2)
+#   s2: port1->h3, port2->h4, port3->primary(s1-s2), port4->backup(s1-s2)
+
 
 def create_topology():
 
@@ -34,27 +45,45 @@ def create_topology():
     h3 = net.addHost('h3', ip='10.0.0.3/24')
     h4 = net.addHost('h4', ip='10.0.0.4/24')
 
-    # Switch
-    s1 = net.addSwitch(
-        's1',
-        protocols='OpenFlow13'
-    )
+    # Switches
+    s1 = net.addSwitch('s1', protocols='OpenFlow13')
+    s2 = net.addSwitch('s2', protocols='OpenFlow13')
 
-    # Links
+    # Host links (ports 1-2 on each switch)
     net.addLink(h1, s1)
     net.addLink(h2, s1)
-    net.addLink(h3, s1)
-    net.addLink(h4, s1)
+    net.addLink(h3, s2)
+    net.addLink(h4, s2)
+
+    # Redundant backbone: PRIMARY link first (port 3 on both switches),
+    # BACKUP link second (port 4 on both switches).
+    #
+    # IMPORTANT: Mininet's `net.configLinkStatus('s1','s2',status)` (and the
+    # CLI's `link s1 s2 down`) toggles *every* link between the two nodes at
+    # once -- with two parallel links that would kill both simultaneously
+    # and there would be nothing left to fail over to. So we keep direct
+    # references to each link and bring down only the primary interfaces
+    # (see the `py` snippet printed below).
+    primary_link = net.addLink(s1, s2)   # primary -> port 3 on both switches
+    backup_link = net.addLink(s1, s2)    # backup  -> port 4 on both switches
+    net.primary_link = primary_link
+    net.backup_link = backup_link
 
     net.start()
 
-    print("\n*** Network started ***")
-    print("h1 = Client       = 10.0.0.1")
-    print("h2 = Coordinator  = 10.0.0.2")
-    print("h3 = Worker 1     = 10.0.0.3")
-    print("h4 = Worker 2     = 10.0.0.4")
-    print("s1 = OVS Switch")
+    print("\n*** Network started (D2: two switches, redundant backbone) ***")
+    print("h1 = Client       = 10.0.0.1   (behind s1)")
+    print("h2 = Coordinator  = 10.0.0.2   (behind s1)")
+    print("h3 = Worker 1     = 10.0.0.3   (behind s2)")
+    print("h4 = Worker 2     = 10.0.0.4   (behind s2)")
+    print("s1 <-> s2         = two links: primary (port 3) + backup (port 4)")
     print("c0 = Ryu Controller = 127.0.0.1:6633")
+    print()
+    print("To demo rerouting (do NOT use `link s1 s2 down` -- it takes BOTH links down):")
+    print('  mininet> py net.primary_link.intf1.ifconfig("down"); net.primary_link.intf2.ifconfig("down")')
+    print("  ... jobs keep completing; Ryu failed over to the backup link ...")
+    print('  mininet> py net.primary_link.intf1.ifconfig("up"); net.primary_link.intf2.ifconfig("up")')
+    print("  ... Ryu fails back to the primary link ...")
     print()
 
     # ---- Auto-launch coordinator + workers in the background ----

@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Job Queue SDN Lab</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+:root{--bg:#eef1f6;--panel:#fff;--ink:#1c2433;--mut:#66728a;--line:#c9d2e0;--wire:#8795ae;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#141a27;--panel:#1d2536;--ink:#e6ebf5;--mut:#8f9bb3;--line:#2e3a52;--wire:#5a6a8a}}
+:root[data-theme="dark"]{--bg:#141a27;--panel:#1d2536;--ink:#e6ebf5;--mut:#8f9bb3;--line:#2e3a52;--wire:#5a6a8a}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px 'Space Grotesk',system-ui,sans-serif}
+.bar{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--line)}
+.bar h1{font-size:16px;margin:0 6px 0 0}
+.grp{display:flex;gap:6px;align-items:center;padding-left:14px;border-left:1px solid var(--line)}
+button,select,input{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:5px 10px}
+button{cursor:pointer}button:hover{border-color:var(--wire)}
+button.go{background:#4f46e5;color:#fff;border-color:#4f46e5;font-weight:600}button.go.on{background:#dc2626;border-color:#dc2626}
+input[type=number]{width:62px}input[type=range]{width:110px;padding:0}
+.leg{display:flex;flex-wrap:wrap;gap:10px;padding:8px 14px;color:var(--mut);font-size:12px}
+.leg i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px;vertical-align:-1px}
+.wrap{overflow:auto;max-width:100%}
+#stage{position:relative;width:1480px;margin:0 auto;background-image:radial-gradient(var(--line) 1px,transparent 1px);background-size:22px 22px}
+#stage svg{position:absolute;left:0;top:0;pointer-events:none}
+.wire{stroke:var(--wire);stroke-width:3;stroke-linecap:round}.wire.off{stroke:#dc2626;stroke-dasharray:3 7;opacity:.6}.wire.ctl{stroke-dasharray:8 6;stroke-width:2}
+.sw{fill:var(--panel);stroke:var(--wire);stroke-width:2}
+.card{position:absolute;width:340px;height:280px;background:var(--panel);border:1px solid var(--line);border-radius:12px;display:flex;flex-direction:column;overflow:hidden;border-top:4px solid var(--c)}
+.card.client{--c:#3b82f6}.card.worker{--c:#f59e0b}.card.coord{--c:#a855f7}.card.ctrl{--c:#14b8a6}
+.card.frz{border-color:#38bdf8;border-style:dashed}.card.dead{opacity:.75;border-color:#dc2626}.stopped .card{opacity:.55}
+.hd{padding:6px 9px 4px;font-size:12px;position:relative;height:78px}
+.hd b{font-size:13px}.hd .m{color:var(--mut);font-family:'JetBrains Mono',monospace;font-size:11px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;margin-right:5px}.dead .dot{background:#dc2626}
+.hd .row{margin-top:2px;display:flex;gap:5px;align-items:center;color:var(--mut)}
+.hd button{padding:1px 8px;font-size:12px}.hd input{width:48px;padding:1px 4px;font-size:12px}
+.x{position:absolute;right:6px;top:4px;border:0!important;background:none!important;color:var(--mut)}
+.term{margin:0;flex:1;overflow:auto;background:#0d121c;color:#c5cee0;font:12px/1.5 'JetBrains Mono',monospace;padding:6px 8px;white-space:pre-wrap;word-break:break-word}
+.term .ok{color:#6ee7a0}.term .err{color:#ff8a8a}.term .warn{color:#fbbf24}
+.pnl{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:12px 14px}
+.pnl>div{background:var(--panel);border:1px solid var(--line);border-radius:10px;height:230px;overflow:auto;padding:8px 10px}
+.pnl h3{margin:0 0 6px;font-size:13px}
+table{width:100%;border-collapse:collapse;font-size:12px}td,th{text-align:left;padding:3px 5px;border-bottom:1px solid var(--line)}
+.lg{font:11px 'JetBrains Mono',monospace;border-bottom:1px solid var(--line);padding:2px 0;color:var(--mut)}.lg b{color:var(--ink)}
+@media(max-width:760px){.pnl{grid-template-columns:1fr}}
+</style></head><body>
+<div class="bar">
+ <h1>Job Queue SDN Lab</h1><span id="mode" style="color:var(--mut);font-size:12px">simulation (backend not found)</span>
+ <button class="go" id="run">Run</button><button id="pause">Pause</button>
+ <label>Speed <input type="range" id="spd" min="0.05" max="4" step="0.05" value="1"> <span id="spv">1×</span></label>
+ <label title="Not in the original coordinator (it only notices closed connections). Set 0 for exact original behaviour.">Heartbeat timeout <input type="number" id="to" value="9" min="0" max="60"> s</label><label><input type="checkbox" id="hb" checked> show heartbeats</label>
+ <span id="clk" style="color:var(--mut)">stopped</span>
+ <div class="grp"><button id="ac">+ Client</button><button id="aw">+ Worker</button></div>
+ <div class="grp" id="bbgrp" style="display:none"><button id="bbl" title="D2: takes down ONLY the primary s1&lt;-&gt;s2 link. Ryu should reroute flows onto the backup link; jobs keep completing without the app ever being told.">Backbone link: UP</button></div>
+ <div class="grp"><select id="jc"></select> <input type="number" id="jn" value="7" min="-100000" max="100000" title="n: worker returns n*n"><button id="send">Send job</button><button id="burst">Send 5 random</button></div>
+</div>
+<div class="leg" id="leg"></div>
+<div class="wrap"><div id="stage" class="stopped"><svg id="wires"></svg><div id="cards"></div><svg id="pk"></svg></div></div>
+<div class="pnl"><div><h3>Jobs</h3><table id="jt"></table></div><div><h3>Packet log (every packet, with payload)</h3><div id="pl"></div></div></div>
+<script>
+const $=s=>document.querySelector(s),W=340,H=280,SWW=1480;
+const COL={SYN:'#0ea5e9',SUBMIT:'#3b82f6',ACK:'#16a34a',JOB:'#f59e0b',RESULT:'#a855f7',DONE:'#7c3aed',REGISTER:'#0d9488',HEARTBEAT:'#64748b',FIN:'#dc2626'};
+$('#leg').innerHTML=Object.entries(COL).map(([k,c])=>`<span><i style="background:${c}"></i>${k}</span>`).join('')+'<span>gray dot = OpenFlow PACKET_IN / FLOW_MOD to controller</span>';
+let L=.6,LIVE=false,LIVE_READY=false,nodes=[],host=1,wk=1,S,sw={x:0,y:0},SH=720,speed=1,paused=false;
+// D2: two switches (s1 = client+coord side, s2 = worker side), joined by a
+// redundant primary+backup link. sw1/sw2 are their draw positions; `sw`
+// above is kept as their midpoint, used only as the relay point for the
+// packet-animation physics (a deliberate simplification -- the real
+// per-hop path doesn't need to be animated for this to demo correctly).
+let sw1={x:0,y:0},sw2={x:0,y:0},backboneDown=false;
+const swFor=n=>n.type=='worker'?sw2:sw1;      // which switch a host hangs off
+const rp=()=>30000+Math.floor(Math.random()*30000);
+const mk=(type,name)=>{const h=host++;const n={id:'h'+h,type,name,ip:'10.0.0.'+h,log:[],alive:true,frozen:false,gen:0,min:2,max:8,buf:[],timer:null,port:rp()};if(type=='worker')n.wid='w'+wk++;return n};
+nodes=[mk('client','Client 1'),mk('coord','Coordinator'),mk('worker','Worker 1'),mk('worker','Worker 2'),{id:'c0',type:'ctrl',name:'Ryu controller',ip:'127.0.0.1:6633',log:[],alive:true}];
+const node=id=>nodes.find(n=>n.id==id),coord=()=>nodes.find(n=>n.type=='coord'),ctrl=()=>nodes.find(n=>n.type=='ctrl');
+const fresh=()=>{S={t:0,running:false,pkts:[],timers:[],jobs:[],flows:new Set(),pid:0}};fresh();
+function layout(){const cs=nodes.filter(n=>n.type=='client'),ws=nodes.filter(n=>n.type=='worker');
+ SH=Math.max(720,Math.max(cs.length,ws.length)*(H+18)+40);
+ sw1={x:SWW/2-110,y:SH/2};sw2={x:SWW/2+110,y:SH/2};sw={x:(sw1.x+sw2.x)/2,y:(sw1.y+sw2.y)/2};
+ cs.forEach((n,i)=>{n.x=20;n.y=20+i*(H+18)});ws.forEach((n,i)=>{n.x=SWW-W-20;n.y=20+i*(H+18)});
+ const c=coord(),k=ctrl();c.x=k.x=SWW/2-W/2;c.y=16;k.y=SH-H-16}
+function anc(n){return n.type=='client'?{x:n.x+W,y:n.y+H/2}:n.type=='worker'?{x:n.x,y:n.y+H/2}:n.type=='coord'?{x:n.x+W/2,y:n.y+H}:{x:n.x+W/2,y:n.y}}
+const sub={client:'simple_client.py',coord:'simple_coordinator.py :6000',ctrl:'OpenFlow 1.3 learning switch'};
+function build(){layout();const st=$('#stage');st.style.height=SH+'px';st.className=S.running?'':'stopped';
+ ['wires','pk'].forEach(i=>{$('#'+i).setAttribute('width',SWW);$('#'+i).setAttribute('height',SH)});
+ $('#cards').innerHTML=nodes.map(n=>`<div class="card ${n.type} ${n.alive?'':'dead'} ${n.frozen?'frz':''}" id="n-${n.id}" style="left:${n.x}px;top:${n.y}px">
+ <div class="hd"><b><span class="dot"></span>${n.name}</b>${n.type=='coord'||n.type=='ctrl'?'':`<button class="x" data-a="rm" data-i="${n.id}" title="Remove">×</button>`}
+ <div class="m">${n.id} ${n.ip}${n.wid?' id='+n.wid:''}</div>${n.type=='worker'?`<div class="row"><button data-a="kill" data-i="${n.id}">${n.alive?'Kill':'Revive'}</button><button data-a="frz" data-i="${n.id}" ${n.alive?'':'disabled'}>${n.frozen?'Unfreeze':'Freeze'}</button>${LIVE?`<button data-a="lnk" data-i="${n.id}" title="Takes the s2 port down: Ryu sees PORT_STATUS and tells the coordinator (SDN to app event)">${n.linkdown?'Link up':'Link down'}</button>`:''}</div>
+ <div class="row">work <input type="number" min="0" data-a="mn" data-i="${n.id}" value="${n.min}">-<input type="number" min="0" data-a="mx" data-i="${n.id}" value="${n.max}">s</div>`:`<div class="row">${sub[n.type]}</div>`}</div>
+ <pre class="term" id="t-${n.id}"></pre></div>`).join('');
+ nodes.forEach(n=>{const e=$('#t-'+n.id);n.log.forEach(l=>addLine(e,l))});
+ const v=$('#jc').value;$('#jc').innerHTML=nodes.filter(n=>n.type=='client').map(n=>`<option value="${n.id}">${n.name}</option>`).join('');if(v&&node(v))$('#jc').value=v;
+ wires();renderJobs()}
+function swBox(p,label){return `<rect x="${p.x-36}" y="${p.y-22}" width="72" height="44" rx="10" class="sw"/><text x="${p.x}" y="${p.y-3}" text-anchor="middle" fill="var(--ink)" font-weight="700" font-size="13">${label}</text><text x="${p.x}" y="${p.y+13}" text-anchor="middle" fill="var(--mut)" font-size="10">OVS OF1.3</text>`}
+function wires(){let s='';
+ // host <-> its own switch (clients/coord -> s1, workers -> s2)
+ nodes.filter(n=>n.type!='ctrl').forEach(n=>{const a=anc(n),p=swFor(n);s+=`<line x1="${a.x}" y1="${a.y}" x2="${p.x}" y2="${p.y}" class="wire ${n.alive&&!n.linkdown?'':'off'}"/>`});
+ // D2: redundant backbone, s1 <-> s2 -- primary (solid, turns red/dashed when
+ // down) drawn slightly above the backup (dashed, turns solid green when it
+ // becomes the active path)
+ const midY=(sw1.y+sw2.y)/2,offY=10;
+ s+=`<line x1="${sw1.x+30}" y1="${midY-offY}" x2="${sw2.x-30}" y2="${midY-offY}" class="wire ${backboneDown?'off':''}"/>`;
+ s+=`<text x="${(sw1.x+sw2.x)/2}" y="${midY-offY-8}" text-anchor="middle" font-size="10" fill="${backboneDown?'#dc2626':'var(--mut)'}">primary${backboneDown?' (DOWN)':''}</text>`;
+ s+=`<line x1="${sw1.x+30}" y1="${midY+offY}" x2="${sw2.x-30}" y2="${midY+offY}" class="wire" stroke-dasharray="${backboneDown?'none':'4 6'}" stroke="${backboneDown?'#16a34a':'var(--wire)'}"/>`;
+ s+=`<text x="${(sw1.x+sw2.x)/2}" y="${midY+offY+16}" text-anchor="middle" font-size="10" fill="${backboneDown?'#16a34a':'var(--mut)'}">backup${backboneDown?' (ACTIVE)':''}</text>`;
+ // control-plane links, Ryu -> both switches
+ const k=anc(ctrl());
+ s+=`<line x1="${k.x}" y1="${k.y}" x2="${sw1.x}" y2="${sw1.y}" class="wire ctl"/>`;
+ s+=`<line x1="${k.x}" y1="${k.y}" x2="${sw2.x}" y2="${sw2.y}" class="wire ctl"/>`;
+ s+=swBox(sw1,'s1')+swBox(sw2,'s2');
+ $('#wires').innerHTML=s}
+function addLine(e,l){const d=document.createElement('div');d.className=l.c;d.textContent=`[${l.t.toFixed(1)}s] ${l.m}`;e.append(d);while(e.children.length>60)e.firstChild.remove();e.scrollTop=1e9}
+function nlog(n,m,c=''){const l={t:S.t,m,c};n.log.push(l);if(n.log.length>60)n.log.shift();const e=$('#t-'+n.id);if(e)addLine(e,l)}
+const show=(c,tag,m,k)=>nlog(c,('['+tag+']').padEnd(11)+m,k);
+const at=(d,f)=>{const t={t:S.t+d,f};S.timers.push(t);return t};
+function runTimers(){let due;while((due=S.timers.filter(x=>!x.x&&x.t<=S.t)).length){due.sort((a,b)=>a.t-b.t);due.forEach(x=>{x.x=1;x.f()})}S.timers=S.timers.filter(x=>!x.x)}
+function send(a,b,type,raw,meta={}){if(!S.running)return;const p={id:++S.pid,a,b,type,pl:raw,st:0,ss:S.t,label:raw,...meta};
+ if(type=='HEARTBEAT'&&!$('#hb').checked){if(!LIVE)deliver(p);return}
+ S.pkts.push(p);const d=document.createElement('div');d.className='lg';d.innerHTML=`${S.t.toFixed(1)}s <b>${a.name} → ${b.name}</b> ${raw}`;$('#pl').prepend(d);while($('#pl').children.length>80)$('#pl').lastChild.remove()}
+function step(){for(const p of S.pkts){const e=S.t-p.ss,k=p.a.id+'>'+p.b.id;
+ if(p.st==0&&e>=L){p.ss=S.t;if(S.flows.has(k)||LIVE)p.st=2;else{p.st=1;nlog(ctrl(),`PACKET_IN s1: ${p.a.ip} -> ${p.b.ip}, no flow`,'warn')}}
+ else if(p.st==1&&e>=.8){S.flows.add(k);nlog(ctrl(),`FLOW_MOD: ${p.a.id} -> ${p.b.id} installed`,'ok');p.st=2;p.ss=S.t}
+ else if(p.st==2&&e>=L){if(deliver(p))p.st=3}
+ else if(p.st==4&&e>=.6)p.st=3}
+ S.pkts=S.pkts.filter(p=>p.st!=3)}
+function deliver(p){if(LIVE){liveArrive(p);return true}const d=p.b;if(!d.alive){nlog(d,`${p.type} arrived but host is down: dropped`,'err');p.st=4;p.ss=S.t;return false}
+ ({client:cli,coord:coo,worker:wrk}[d.type])(d,p);return true}
+
+/* ========== LIVE visual sequencing ==========
+   Rules (what you asked for):
+   1. SUBMIT packets fly concurrently (Send 5 = 5 SUBMITs in the air).
+   2. No ACK / JOB / RESULT / DONE starts until EVERY in-flight SUBMIT has landed.
+      → coordinator always "receives" before anything goes to workers.
+   3. After submits clear, packets release in type order: ACK, then JOB, then RESULT, then DONE.
+      Different jobs may progress in parallel once their stage is ready.
+   4. Per-job gates:
+        RESULT waits until that job's JOB has landed
+        DONE   waits until that job's RESULT has landed
+   5. Terminal logs only appear when the packet lands (Submitting on SUBMIT start,
+      assigned on JOB start, Finished only after Received).
+*/
+const JOB_FLOW=new Set(['SUBMIT','ACK','JOB','RESULT','DONE']);
+const TYPE_PRI={SUBMIT:0,ACK:1,JOB:2,RESULT:3,DONE:4};
+const vis={};          // jobId -> {received, finishedLine}
+const landedJOB=new Set();   // jobIds whose JOB packet has landed at worker
+const landedRESULT=new Set(); // jobIds whose RESULT has landed at coord
+let flyingSUBMIT=0;    // count of SUBMIT animations still in the air
+const busyW=new Set(); // ids of workers the UI believes are running a job
+const schedLoad={};    // jobId -> SDN-measured load printed by the real coordinator
+const holdQ=[];        // held packets waiting for gates: {a,b,type,raw}
+
+const jobOf=id=>S.jobs.find(j=>j.id==id);
+
+function ensureReceived(jobId, workerNode, nVal){
+  const k=jobId+'@'+workerNode.id;          // keyed per worker: a job re-sent to another worker is shown again
+  if(vis[k]&&vis[k].received)return;
+  if(!vis[k])vis[k]={received:false,finishedLine:null};
+  nlog(workerNode,`[${workerNode.wid||workerNode.name}] Received ${jobId} (n = ${nVal})`);
+  nlog(workerNode,`[${workerNode.wid||workerNode.name}] Processing...`);
+  vis[k].received=true;
+  if(vis[k].finishedLine){nlog(workerNode,vis[k].finishedLine,'ok');vis[k].finishedLine=null}
+}
+function bufferOrShowFinished(jobId, workerNode, line){
+  const k=jobId+'@'+workerNode.id;
+  if(!vis[k])vis[k]={received:false,finishedLine:null};
+  if(vis[k].received)nlog(workerNode,line,'ok');
+  else vis[k].finishedLine=line;
+}
+// A worker died / was killed / lost its link: forget what it was doing so nothing waits for it forever
+function releaseWorker(n){
+  busyW.delete(n.id);
+  for(let i=holdQ.length-1;i>=0;i--)if(holdQ[i].type==='JOB'&&holdQ[i].b===n)holdQ.splice(i,1);
+  pumpHold();
+}
+function jidOf(type,raw){
+  if(type==='SUBMIT')return null;
+  return ((raw||'').split('|')[1])||null;
+}
+function canRelease(p){
+  const type=p.type,raw=p.raw;
+  // 1) nothing after SUBMIT until all SUBMITs have landed
+  if(type!=='SUBMIT'&&flyingSUBMIT>0)return false;
+  const jid=jidOf(type,raw);
+  // 2) JOB only if a visual worker slot is free (this is the queue!)
+  if(type==='JOB'&&busyW.has(p.b.id))return false;
+  // 3) RESULT only after that job's JOB has landed
+  if(type==='RESULT'&&jid&&!landedJOB.has(jid))return false;
+  // 4) DONE only after that job's RESULT has landed
+  if(type==='DONE'&&jid&&!landedRESULT.has(jid))return false;
+  return true;
+}
+function startAnim(a,b,type,raw){
+  if(type==='SUBMIT'){
+    flyingSUBMIT++;
+    if(a.type==='client'){const n=raw.split('|')[1];nlog(a,`[CLIENT] Submitting job (n = ${n})`)}
+  }
+  if(type==='JOB'){
+    busyW.add(b.id);
+    if(a.type==='coord'){
+      const parts=raw.split('|');const j=jobOf(parts[1]);landedJOB.delete(parts[1]);
+      if(j){j.status='assigned';j.worker=b.wid||b.name;renderJobs()}
+      const ld=schedLoad[parts[1]];
+      show(a,'SCHEDULER',`${parts[1]} -> assigned to worker ${b.wid||b.name}`+(ld!=null?`   (SDN-measured load: ${ld} B/s)`:''));
+    }
+  }
+  send(a,b,type,raw);
+}
+function pumpHold(){
+  // sort held by priority so ACK before JOB before RESULT before DONE
+  holdQ.sort((p,q)=>(TYPE_PRI[p.type]||9)-(TYPE_PRI[q.type]||9));
+  // mark JOBs still waiting for a free worker as queued in the table
+  for(const p of holdQ){
+    if(p.type==='JOB'){
+      const id=jidOf(p.type,p.raw);const j=jobOf(id);
+      if(j&&j.status!=='assigned'&&j.status!=='done'){j.status='queued';j.worker=null}
+    }
+  }
+  renderJobs();
+  let changed=true;
+  while(changed){
+    changed=false;
+    for(let i=0;i<holdQ.length;i++){
+      const p=holdQ[i];
+      if(canRelease(p)){
+        holdQ.splice(i,1);
+        startAnim(p.a,p.b,p.type,p.raw);
+        changed=true;
+        break;
+      }
+    }
+  }
+}
+function enqueuePkt(a,b,type,raw){
+  if(!JOB_FLOW.has(type)){send(a,b,type,raw);return} // HB / REGISTER free
+  if(type==='SUBMIT'){startAnim(a,b,type,raw);return} // concurrent SUBMITs
+  // everything else is held until gates open
+  holdQ.push({a,b,type,raw});
+  pumpHold();
+}
+function liveArrive(p){
+  const t=p.type,x=(p.pl||'').split('|'),a=p.a,b=p.b;
+  if(t==='SUBMIT'){
+    flyingSUBMIT=Math.max(0,flyingSUBMIT-1);
+    const n=x[1];
+    // match oldest sending/queued job with this n
+    let j=S.jobs.find(j=>j.status==='queued'&&String(j.n)===String(n)&&!j._shownSubmit)
+         ||S.jobs.find(j=>!j.id&&j.status==='sending'&&String(j.n)===String(n))
+         ||S.jobs.find(j=>j.status==='sending'&&!j._shownSubmit);
+    if(!j){j={id:null,client:a.id,n:n,status:'queued',worker:null,requeues:0,res:''};S.jobs.push(j)}
+    if(!j.id)j.id='job'+(S.jobs.filter(x=>x.id).length+1);
+    j.status='queued';j._shownSubmit=1;
+    show(b,'CLIENT',`New job ${j.id} received from ('${a.ip}', ${a.port||'?'})   (n = ${n})`);
+    renderJobs();
+    pumpHold(); // may release ACKs / JOBs now that a SUBMIT has landed
+  }
+  else if(t==='ACK'){
+    nlog(b,`[CLIENT] Coordinator accepted it -> job ID: ${x[1]}`);
+    nlog(b,'[CLIENT] Waiting for result...');
+    pumpHold();
+  }
+  else if(t==='JOB'){
+    const id=x[1],nn=x[2];
+    ensureReceived(id,b,nn);
+    landedJOB.add(id);
+    const j=jobOf(id);if(j){j.status='assigned';j.worker=b.wid||b.name;renderJobs()}
+    pumpHold(); // may release RESULT for this job
+  }
+  else if(t==='RESULT'){
+    const id=x[1],ans=x[2];
+    const j=jobOf(id);if(j){j.status='done';j.res=ans}
+    show(b,'RESULT',`${id} completed by ${a.wid||a.name}   (answer = ${ans})`,'ok');
+    bufferOrShowFinished(id,a,`[${a.wid||a.name}] Finished ${id} -> answer = ${ans}`);
+    landedRESULT.add(id);
+    busyW.delete(a.id); // worker free again → may pull from queue
+    renderJobs();
+    pumpHold(); // release DONE and next queued JOB
+  }
+  else if(t==='DONE'){
+    nlog(b,`[CLIENT] RESULT for ${x[1]} = ${x[2]}`,'ok');
+    const j=jobOf(x[1]);if(j){j.status='done';j.res=x[2];renderJobs()}
+  }
+  else if(t==='REGISTER'){
+    show(b,'WORKER',`${x[1]} connected from ('${a.ip}', ${a.port||'?'})`);
+  }
+}
+function resetLiveSeq(){
+  flyingSUBMIT=0;busyW.clear();holdQ.length=0;for(const k of Object.keys(schedLoad))delete schedLoad[k];landedJOB.clear();landedRESULT.clear();
+  for(const k of Object.keys(vis))delete vis[k];
+}
+
+// ---- client: simple_client.py
+function sendJob(cid,n){const c=node(cid);if(!S.running){$('#clk').textContent='press Run first';return}if(LIVE&&!LIVE_READY){$('#clk').textContent='wait for network ready';nlog(ctrl(),'wait for "network ready" before sending jobs','warn');return}n=parseInt(n);if(!c||isNaN(n))return;if(LIVE){S.jobs.push({id:null,client:cid,n,status:'sending',worker:null,requeues:0,res:''});renderJobs();api('job',{client:cid,n}).then(r=>{if(!r.ok)nlog(c,'could not start job: '+r.error,'err')});return}
+ const j={id:null,client:cid,n,status:'sending',worker:null,wref:null,requeues:0,res:''};S.jobs.push(j);
+ nlog(c,`[CLIENT] Submitting job (n = ${n})`);send(c,coord(),'SUBMIT','SUBMIT|'+n,{ref:j});renderJobs()}
+function cli(c,p){const x=p.pl.split('|');if(x[0]=='ACK'){nlog(c,`[CLIENT] Coordinator accepted it -> job ID: ${x[1]}`);nlog(c,'[CLIENT] Waiting for result...')}
+ else if(x[0]=='DONE')nlog(c,`[CLIENT] RESULT for ${x[1]} = ${x[2]}`,'ok')}
+// ---- coordinator: simple_coordinator.py
+function coo(c,p){const C=c.st,s=p.a,x=p.pl.split('|'),w=C.workers.find(w=>w.node==s&&w.gen==p.gen);
+ if(x[0]=='REGISTER'){C.workers.push({id:x[1],node:s,busy:false,hb:S.t,gen:p.gen});show(c,'WORKER',`${x[1]} connected from ('${s.ip}', ${s.port})   (workers online: ${C.workers.length})`)}
+ else if(x[0]=='SUBMIT'){const j=p.ref;j.id='job'+(++C.cnt);j.status='queued';C.q.push(j);send(c,s,'ACK','ACK|'+j.id);show(c,'CLIENT',`New job ${j.id} received from ('${s.ip}', ${s.port})   (n = ${j.n})`)}
+ else if(x[0]=='HEARTBEAT'){if(w)w.hb=S.t}
+ else if(x[0]=='RESULT'){const j=jobOf(x[1]);if(w)w.busy=false;if(j&&j.status=='assigned'){j.status='done';j.res=x[2];show(c,'RESULT',`${j.id} completed by ${w?w.id:'?'}   (answer = ${x[2]})`,'ok');send(c,node(j.client),'DONE',`DONE|${j.id}|${x[2]}`)}}
+ else if(x[0]=='FIN')failure(c,w,'disconnected!');
+ renderJobs()}
+function failure(c,w,why){const C=c.st;if(!w||!C.workers.includes(w))return;C.workers=C.workers.filter(v=>v!=w);show(c,'FAILURE',`Worker ${w.id} ${why}`,'err');
+ S.jobs.filter(j=>j.status=='assigned'&&j.wref==w).forEach(j=>{j.status='queued (recovered)';j.worker=null;j.wref=null;j.requeues++;C.q.push(j);show(c,'RECOVERY',`${j.id} was running on ${w.id} -> put back in the queue`,'warn')});renderJobs()}
+function tick(c){if(!S.running)return;const C=c.st,T=+$('#to').value;
+ if(T>0)for(const w of C.workers.slice())if(S.t-w.hb>T){failure(c,w,`silent for ${T}s (heartbeat timeout)`);send(c,w.node,'FIN','FIN',{gen:w.gen})}
+ if(C.q.length){const w=C.workers.find(w=>!w.busy);if(w){const j=C.q.shift();w.busy=true;j.worker=w.id;j.wref=w;j.status='assigned';send(c,w.node,'JOB',`JOB|${j.id}|${j.n}`);show(c,'SCHEDULER',`${j.id} -> assigned to worker ${w.id}`)}}
+ renderJobs();at(.5,()=>tick(c))}
+// ---- worker: simple_worker.py
+function startWorker(w){w.gen++;w.alive=true;w.frozen=false;w.buf=[];w.port=rp();const g=w.gen;
+ nlog(w,`WORKER ${w.wid}`);nlog(w,'Connected to coordinator at 10.0.0.2:6000');nlog(w,'Waiting for jobs...');
+ send(w,coord(),'REGISTER','REGISTER|'+w.wid,{gen:g});
+ (function hb(){at(3,()=>{if(!S.running||!w.alive||w.gen!=g)return;if(!w.frozen)send(w,coord(),'HEARTBEAT','HEARTBEAT',{gen:g});hb()})})()}
+function wrk(w,p){if(w.frozen){w.buf.push(p);return}const x=p.pl.split('|');
+ if(x[0]=='FIN'){nlog(w,'Lost connection to coordinator. Exiting.','err');w.alive=false;build();return}
+ if(x[0]=='JOB'){const id=x[1],g=w.gen;nlog(w,`[${w.wid}] Received ${id} (n = ${x[2]})`);nlog(w,`[${w.wid}] Processing...`);
+  const lo=Math.min(w.min,w.max),hi=Math.max(w.min,w.max),d=lo+Math.floor(Math.random()*(hi-lo+1));
+  const fin=()=>{if(!w.alive||w.gen!=g)return;if(w.frozen){w.pend=fin;return}const n=parseInt(x[2]),a=n*n;send(w,p.a,'RESULT',`RESULT|${id}|${a}`,{gen:g});nlog(w,`[${w.wid}] Finished ${id} -> answer = ${a}`,'ok')};
+  w.timer=at(d,fin)}}
+// ---- rendering
+function renderJobs(){$('#jt').innerHTML='<tr><th>job</th><th>client</th><th>n</th><th>status</th><th>worker</th><th>requeues</th><th>answer</th></tr>'+S.jobs.slice().reverse().map(j=>`<tr><td>${j.id||'...'}</td><td>${node(j.client)?node(j.client).name:'-'}</td><td>${j.n}</td><td>${j.status}</td><td>${j.worker||'-'}</td><td>${j.requeues}</td><td>${j.res}</td></tr>`).join('')}
+function lane(p,x0,y0,x1,y1){const dx=x1-x0,dy=y1-y0,d=Math.hypot(dx,dy)||1,o=((p.id%7)-3)*13;return[-dy/d*o,dx/d*o]}
+function pos(p){const A=anc(p.a),B=anc(p.b),k=Math.min(1,(S.t-p.ss)/L);
+ if(p.st==0){const[ox,oy]=lane(p,A.x,A.y,sw.x,sw.y);return[A.x+(sw.x-A.x)*k+ox,A.y+(sw.y-A.y)*k+oy]}if(p.st==2){const[ox,oy]=lane(p,sw.x,sw.y,B.x,B.y);return[sw.x+(B.x-sw.x)*k+ox,sw.y+(B.y-sw.y)*k+oy]}if(p.st==4)return[B.x,B.y];return[sw.x,sw.y+40+(p.id%3)*22]}
+function draw(){let s='';const k=anc(ctrl());
+ for(const p of S.pkts){const[x,y]=pos(p),w=p.label.length*6.2+14,dead=p.st==4,c=dead?'#dc2626':COL[p.type];
+  if(p.st==1){const e=Math.min(1,(S.t-p.ss)/.8),t=e<.5?e*2:2-e*2,cx=sw.x+(k.x-sw.x)*t,cy=sw.y+(k.y-sw.y)*t;s+=`<circle cx="${cx}" cy="${cy}" r="6" fill="#94a3b8"/><text x="${cx+10}" y="${cy+3}" font-size="9" fill="var(--mut)">${e<.5?'PACKET_IN':'FLOW_MOD'}</text>`}
+  s+=`<g opacity="${dead?1-(S.t-p.ss)/.6:1}"><rect x="${x-w/2}" y="${y-10}" width="${w}" height="20" rx="10" fill="${c}"/><text x="${x}" y="${y+4}" text-anchor="middle" font-size="10" font-family="JetBrains Mono,monospace" fill="#fff">${dead?'DROPPED ✕':p.label}</text></g>`}
+ $('#pk').innerHTML=s}
+let last=performance.now();
+(function frame(now){const dt=Math.min(.1,(now-last)/1000);last=now;if(S.running&&!paused){S.t+=dt*speed;runTimers();step();$('#clk').textContent='t = '+S.t.toFixed(1)+'s'}draw();requestAnimationFrame(frame)})(last);
+// ---- controls
+function simRun(){fresh();resetLiveSeq();S.running=true;nodes.forEach(n=>{n.alive=true;n.frozen=false;n.log=[];n.timer=null;n.buf=[];n.pend=null;n.port=rp();if(n.type=='coord')n.st={workers:[],q:[],cnt:0}});$('#pl').innerHTML='';build();
+ $('#run').textContent='Stop';$('#run').classList.add('on');
+ nlog(ctrl(),'Ryu listening on 127.0.0.1:6633');nlog(ctrl(),'Switch connected! (s1, OpenFlow 1.3, table-miss -> controller)');
+ nlog(coord(),'JOB QUEUE COORDINATOR');nlog(coord(),'Listening on port 6000');nodes.filter(n=>n.type=='client').forEach(c=>nlog(c,'JOB CLIENT ready'));
+ at(.5,()=>tick(coord()));nodes.filter(n=>n.type=='worker').forEach((w,i)=>at(.4+i*.4,()=>startWorker(w)))}
+function stop(){if(LIVE)api('stop',{});S.running=false;LIVE_READY=false;S.pkts=[];resetLiveSeq();$('#run').textContent='Run';$('#run').classList.remove('on');$('#clk').textContent='stopped';build()}
+const api=(p,d)=>fetch('/api/'+p,{method:'POST',body:JSON.stringify(d)}).then(r=>r.json()).catch(e=>({ok:false,error:String(e)}));
+const nd=n=>({host:n.id,type:n.type,ip:n.ip,wid:n.wid});
+async function liveRun(){fresh();resetLiveSeq();S.running=true;LIVE_READY=false;nodes.forEach(n=>{n.alive=true;n.frozen=false;n.linkdown=false;n.log=[]});$('#pl').innerHTML='';build();$('#run').textContent='Stop';$('#run').classList.add('on');
+ nlog(ctrl(),'starting Ryu + Mininet + your scripts (about 6s)... wait for "network ready" before sending jobs','warn');
+ const r=await api('run',{nodes:nodes.filter(n=>n.type!='ctrl').map(nd)});if(!r.ok)nlog(ctrl(),'backend error: '+r.error,'err')}
+const run=()=>LIVE?liveRun():simRun();
+$('#run').onclick=()=>S.running?stop():run();
+$('#pause').onclick=e=>{paused=!paused;e.target.textContent=paused?'Resume':'Pause'};
+$('#spd').oninput=e=>{speed=+e.target.value;$('#spv').textContent=speed+'×'};
+$('#ac').onclick=()=>{const n=mk('client','Client '+(nodes.filter(x=>x.type=='client').length+1));nodes.push(n);build();if(LIVE){if(S.running)api('add',nd(n))}else if(S.running)nlog(n,'JOB CLIENT ready')};
+$('#aw').onclick=()=>{const n=mk('worker','Worker '+(nodes.filter(x=>x.type=='worker').length+1));nodes.push(n);build();if(LIVE){if(S.running)api('add',nd(n))}else if(S.running)at(.2,()=>startWorker(n))};
+$('#send').onclick=()=>sendJob($('#jc').value,$('#jn').value);
+$('#burst').onclick=()=>{const cs=nodes.filter(n=>n.type=='client');if(!cs.length)return;for(let i=0;i<5;i++)at(LIVE?0:i*.5,()=>sendJob(cs[Math.floor(Math.random()*cs.length)].id,1+Math.floor(Math.random()*50)))};
+$('#cards').onclick=e=>{const b=e.target.closest('button[data-a]');if(!b)return;const n=node(b.dataset.i),a=b.dataset.a;
+ if(LIVE){if(a=='rm'){api('remove',{host:n.id});nodes=nodes.filter(x=>x!=n);build()}else if(a=='frz')api('freeze',{host:n.id});else if(a=='lnk')api('link',{host:n.id}).then(r=>{if(!r.ok)nlog(n,'link change failed: '+r.error,'err')});else api(n.alive?'kill':'revive',{host:n.id});return}
+ if(a=='rm'){if(n.alive&&n.type=='worker'&&S.running)send(n,coord(),'FIN','FIN',{gen:n.gen});n.alive=false;nodes=nodes.filter(x=>x!=n)}
+ else if(a=='kill'){if(n.alive){n.alive=false;n.frozen=false;if(n.timer)n.timer.x=1;nlog(n,'^C process killed','err');send(n,coord(),'FIN','FIN',{gen:n.gen})}else if(S.running)startWorker(n)}
+ else if(a=='frz'){n.frozen=!n.frozen;nlog(n,n.frozen?'process frozen (hung, no heartbeats)':'process resumed',n.frozen?'warn':'ok');
+  if(!n.frozen){const b2=n.buf.splice(0);if(n.pend){const f=n.pend;n.pend=null;f()}b2.forEach(q=>{if(n.alive)wrk(n,q)})}}
+ build()};
+$('#cards').onchange=e=>{const t=e.target,n=node(t.dataset.i);if(t.dataset.a=='mn')n.min=Math.max(0,+t.value||0);if(t.dataset.a=='mx')n.max=Math.max(0,+t.value||0)};
+function liveJobs(m){let r,j;
+ if(r=m.match(/New job (job\d+) received from \('([\d.]+)'.*n = (-?\d+)/)){const c=nodes.find(n=>n.ip==r[2]);
+  // FIFO: first sending job with matching n (or any sending from that client)
+  j=S.jobs.find(x=>!x.id&&x.status=='sending'&&(!c||x.client==c.id)&&(String(x.n)==r[3]||true));
+  // prefer exact n match
+  const exact=S.jobs.find(x=>!x.id&&x.status=='sending'&&(!c||x.client==c.id)&&String(x.n)==r[3]);
+  j=exact||j;
+  if(j){j.id=r[1];j.status='queued'}else S.jobs.push({id:r[1],client:c?c.id:'',n:r[3],status:'queued',worker:null,requeues:0,res:''})}
+ else if((r=m.match(/(job\d+) -> assigned to worker (\w+)/))&&(j=jobOf(r[1]))){j.status='assigned';j.worker=r[2]}
+ else if((r=m.match(/(job\d+) completed by (\w+).*answer = (-?\d+)/))&&(j=jobOf(r[1]))){j.status='done';j.res=r[3]}
+ else if((r=m.match(/(job\d+) was running/))&&(j=jobOf(r[1]))){j.status='queued (recovered)';j.worker=null;j.requeues++}
+ renderJobs()}
+fetch('/api/ping').then(r=>r.json()).then(j=>{if(!j.ok)return;LIVE=true;L=.5;$('#mode').textContent='LIVE: real Mininet + Ryu + tcp_socket';$('#leg').lastElementChild.textContent='Ryu card = real controller output ([SDN] lines are flow installs, link events); SCHEDULER lines show load measured from OpenFlow flow stats';$('#to').disabled=true;
+ $('#bbgrp').style.display='';
+ $('#bbl').onclick=()=>api('link_backbone',{}).then(r=>{if(!r.ok)nlog(ctrl(),'backbone toggle failed: '+r.error,'err')});
+ const es=new EventSource('/events');es.onmessage=e=>{const m=JSON.parse(e.data);
+  if(m.type=='log'){const n=node(m.host);if(!n)return;const line=m.line||'';
+   // Job-flow lines are shown only when their packet animation arrives (liveArrive).
+   // Still run liveJobs so the table stays roughly in sync; visual logs are deferred.
+   const defer=/Submitting job|New job .* received|Coordinator accepted|Waiting for result|\[\w+\] Received |Processing\.\.\.|Finished .* answer|completed by|RESULT for|assigned to worker/.test(line);
+   if(n.type=='coord'){liveJobs(line);const lm=line.match(/(job\d+) -> assigned to worker \w+.*load: (\d+) B\/s/);if(lm)schedLoad[lm[1]]=lm[2]}
+   if(defer)return; // visual log will appear from liveArrive / pkt-start
+   const isErr=/FAILURE|Lost|Error|Traceback|Errno|WARNING|giving up|failed/.test(line),isRec=/RECOVERY/.test(line);
+   nlog(n,line,isErr?'err':isRec?'warn':/RESULT|accepted|Finished|^\[SDN\]/.test(line)?'ok':'')}
+  else if(m.type=='pkt'){const a=nodes.find(n=>n.ip==m.src),b=nodes.find(n=>n.ip==m.dst);if(!a||!b||!S.running)return;let t=m.label.split('|')[0];
+   if(t=='SYN'||t=='FIN'||t=='RST')return; // skip TCP control
+   // SUBMITs fly now; ACK/JOB/RESULT/DONE held until SUBMITs land (see enqueuePkt)
+   enqueuePkt(a,b,COL[t]?t:'ACK',m.label)}
+  else if(m.type=='state'){const n=node(m.host);if(n){n.alive=m.alive;n.frozen=!!m.frozen;if(!m.alive)releaseWorker(n);build()}}
+  else if(m.type=='link'){const n=node(m.host);if(n){n.linkdown=!!m.down;nlog(ctrl(),`(you) ${n.id} link to its switch set ${m.down?'DOWN':'UP'}`,m.down?'warn':'ok');build()}}
+  else if(m.type=='backbone'){backboneDown=!!m.down;$('#bbl').textContent='Backbone link: '+(m.down?'DOWN (on backup)':'UP');$('#bbl').classList.toggle('go',m.down);build()}
+  else if(m.type=='ready'){LIVE_READY=true;S.running=true;$('#run').textContent='Stop';$('#run').classList.add('on');nlog(ctrl(),'network ready — you can send jobs now','ok');build()}
+  else if(m.type=='stopped'){S.running=false;LIVE_READY=false;S.pkts=[];$('#run').textContent='Run';$('#run').classList.remove('on');build()}}}).catch(()=>{});
+build();
+</script></body></html>
