@@ -210,8 +210,10 @@ def handle_worker(conn, addr, worker_id, read_line):
 
 def scheduler():
     # Runs forever in the background, giving queued jobs to free workers.
+    # Sleep is short so newly freed workers and fresh LOAD figures are
+    # reacted to quickly (important for the performance comparison).
     while True:
-        time.sleep(0.5)
+        time.sleep(0.15)
 
         # 1) workers that stopped sending heartbeats are treated as failed
         now = time.time()
@@ -224,7 +226,8 @@ def scheduler():
                 pass
             fail_worker(w, "silent for " + str(HB_TIMEOUT) + "s (heartbeat timeout)")
 
-        # 2) give the next job to the LEAST LOADED free worker (load comes from the SDN controller)
+        # 2) give the next job to the LEAST LOADED free worker
+        #    (load comes from the SDN controller via LOAD messages)
         with lock:
             if len(job_queue) == 0:
                 continue
@@ -233,6 +236,9 @@ def scheduler():
             if not free:
                 continue
 
+            # Prefer the free worker with the lowest SDN-measured load.
+            # When no LOAD has been received yet the default is 0, so the
+            # first free worker is chosen (static baseline behaviour).
             free_worker = min(free, key=lambda w: worker_load.get(w["id"], 0))
             job = job_queue.pop(0)
             free_worker["busy"] = True
