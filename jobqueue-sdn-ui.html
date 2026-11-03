@@ -41,7 +41,12 @@ input[type=number]{width:62px}input[type=range]{width:110px;padding:0}
 table{width:100%;border-collapse:collapse;font-size:12px}td,th{text-align:left;padding:3px 5px;border-bottom:1px solid var(--line)}
 .lg{font:11px 'JetBrains Mono',monospace;border-bottom:1px solid var(--line);padding:2px 0;color:var(--mut)}.lg b{color:var(--ink)}
 @media(max-width:760px){.pnl{grid-template-columns:1fr}}
+/* D2 toast for live SDN events (reroute, link-down, etc.) */
+#toast{position:fixed;top:18px;left:50%;transform:translateX(-50%) translateY(-120%);background:#0f172a;color:#f8fafc;padding:10px 22px;border-radius:10px;font-weight:600;font-size:13px;box-shadow:0 8px 28px rgba(0,0,0,.35);z-index:999;transition:transform .35s ease,opacity .35s ease;opacity:0;pointer-events:none;max-width:90vw;text-align:center}
+#toast.show{transform:translateX(-50%) translateY(0);opacity:1}
+#toast.warn{background:#b45309}#toast.ok{background:#15803d}#toast.err{background:#b91c1c}
 </style></head><body>
+<div id="toast"></div>
 <div class="bar">
  <h1>Job Queue SDN Lab</h1><span id="mode" style="color:var(--mut);font-size:12px">simulation (backend not found)</span>
  <button class="go" id="run">Run</button><button id="pause">Pause</button>
@@ -109,6 +114,7 @@ function wires(){let s='';
  $('#wires').innerHTML=s}
 function addLine(e,l){const d=document.createElement('div');d.className=l.c;d.textContent=`[${l.t.toFixed(1)}s] ${l.m}`;e.append(d);while(e.children.length>60)e.firstChild.remove();e.scrollTop=1e9}
 function nlog(n,m,c=''){const l={t:S.t,m,c};n.log.push(l);if(n.log.length>60)n.log.shift();const e=$('#t-'+n.id);if(e)addLine(e,l)}
+function toast(msg,kind=''){const el=$('#toast');if(!el)return;el.textContent=msg;el.className=(kind||'')+' show';clearTimeout(el._t);el._t=setTimeout(()=>el.classList.remove('show'),3200)}
 const show=(c,tag,m,k)=>nlog(c,('['+tag+']').padEnd(11)+m,k);
 const at=(d,f)=>{const t={t:S.t+d,f};S.timers.push(t);return t};
 function runTimers(){let due;while((due=S.timers.filter(x=>!x.x&&x.t<=S.t)).length){due.sort((a,b)=>a.t-b.t);due.forEach(x=>{x.x=1;x.f()})}S.timers=S.timers.filter(x=>!x.x)}
@@ -386,8 +392,10 @@ fetch('/api/ping').then(r=>r.json()).then(j=>{if(!j.ok)return;LIVE=true;L=.5;$('
    // SUBMITs fly now; ACK/JOB/RESULT/DONE held until SUBMITs land (see enqueuePkt)
    enqueuePkt(a,b,COL[t]?t:'ACK',m.label)}
   else if(m.type=='state'){const n=node(m.host);if(n){n.alive=m.alive;n.frozen=!!m.frozen;if(!m.alive)releaseWorker(n);build()}}
-  else if(m.type=='link'){const n=node(m.host);if(n){n.linkdown=!!m.down;nlog(ctrl(),`(you) ${n.id} link to its switch set ${m.down?'DOWN':'UP'}`,m.down?'warn':'ok');build()}}
-  else if(m.type=='backbone'){backboneDown=!!m.down;$('#bbl').textContent='Backbone link: '+(m.down?'DOWN (on backup)':'UP');$('#bbl').classList.toggle('go',m.down);build()}
+  else if(m.type=='link'){const n=node(m.host);if(n){n.linkdown=!!m.down;nlog(ctrl(),`(you) ${n.id} link to its switch set ${m.down?'DOWN':'UP'}`,m.down?'warn':'ok');build();
+   if(m.down)toast('🔗 Worker link DOWN → SDN notifies app → job will be re-queued','warn');else toast('Worker link restored','ok')}}
+  else if(m.type=='backbone'){backboneDown=!!m.down;$('#bbl').textContent='Backbone link: '+(m.down?'DOWN (on backup)':'UP');$('#bbl').classList.toggle('go',m.down);build();
+   toast(m.down?'⚡ SDN REROUTE: primary backbone DOWN → traffic moved to backup link':'↩ Backbone restored → traffic failed back to primary',m.down?'warn':'ok')}
   else if(m.type=='ready'){LIVE_READY=true;S.running=true;$('#run').textContent='Stop';$('#run').classList.add('on');nlog(ctrl(),'network ready — you can send jobs now','ok');build()}
   else if(m.type=='stopped'){S.running=false;LIVE_READY=false;S.pkts=[];$('#run').textContent='Run';$('#run').classList.remove('on');build()}}}).catch(()=>{});
 build();
