@@ -8,6 +8,7 @@ The SDN controller **watches the coordinator↔worker traffic** and **reacts to 
 
 | Project requirement | How it is met |
 |---|---|
+| Baseline-compared performance evaluation | `tests/test_performance.py` — throughput, Jain fairness, failover timing, and a side-by-side SDN-aware vs static baseline under congestion (§6) |
 | Concurrent TCP clients | one thread per connection in the coordinator |
 | Job submission + acknowledgment | `SUBMIT` → `ACK\|jobId`, later `DONE` |
 | Register/monitor workers | `REGISTER`, 3 s `HEARTBEAT`, 10 s timeout |
@@ -48,7 +49,7 @@ Port numbering is fixed by the order links are added in `topology.py`/`backend.p
 | `backend.py`, `jobqueue-sdn-ui.html` | GUI that runs the **real** stack and visualises it — **D2: two-switch layout + "Toggle backbone link" button** |
 | `tests/test_sockets.py` | automated socket tests (no Mininet needed) — unchanged |
 | `tests/test_mininet.py` | automated end-to-end test in Mininet + Ryu — **D2: added backbone-failure/reroute checks** |
-| `tests/test_performance.py` | **D2 (new):** throughput, scheduling balance, and failover-time measurements |
+| `tests/test_performance.py` | **D2:** rigorous suite — throughput/latency, Jain fairness, SDN-aware vs static baseline, failover timing, repeated-failure robustness; writes JSON + Markdown report |
 
 ## 3. Message protocol (newline-terminated text over TCP :6000)
 | Message | Direction | Meaning |
@@ -130,8 +131,9 @@ Wait for **network ready** (~6 s), then use *Send job*, *Kill*, *Freeze*, **Link
 ```bash
 python3 tests/test_sockets.py                     # 8 socket tests, ~25 s, no root, no Mininet
 sudo python3 tests/test_mininet.py                 # end-to-end (Ryu must already be running)
-python3 tests/test_performance.py                  # D2: throughput / balance / failover timing, no root needed
+python3 tests/test_performance.py                  # D2: rigorous performance suite (no root needed)
 ```
+
 | # | Scenario | Expected | Test |
 |---|---|---|---|
 | T1 | 5 concurrent clients, 2 workers | all 5 get n² | `test_five_concurrent_clients…` |
@@ -144,7 +146,24 @@ python3 tests/test_performance.py                  # D2: throughput / balance / 
 | T8 | Worker keeps dying | job failed after 3 attempts (`too_many_worker_failures`) | `test_worker_that_always_dies…` |
 | M1–M8 | Mininet: pingAll (2 switches), flows installed, job result, non-zero `LOAD`, worker-link-down → failover, bad input | see `tests/test_mininet.py` | end-to-end |
 | **M9–M12 (D2)** | **Primary backbone down → job still completes; no `WORKER_DOWN`/`LINK_DOWN` sent to app; flows move to backup port; backbone restored → job still completes** | see `tests/test_mininet.py` | end-to-end |
-| **P1–P2 (D2)** | **Throughput at 1/3/6/10 concurrent clients; scheduler balance; worker-kill failover timing** | printed report + `/tmp/sdn_perf_report.json` | `tests/test_performance.py` |
+
+### Performance evaluation (`tests/test_performance.py`)
+
+The suite runs the **real** TCP coordinator/worker/client processes (no simulation) and produces both a JSON dump and a Markdown report:
+
+| Experiment | What is measured | Why it matters for the rubric |
+|---|---|---|
+| **P1 Throughput & latency** | jobs/s + p50/p95 latency at 1 / 3 / 6 / 10 concurrent clients (3 repeats, mean ± stdev) | Shows the system scales under load |
+| **P2 Fairness** | Jain’s fairness index of job distribution across workers | Quantifies load-balancing quality |
+| **P3 Baseline comparison** | Same congested-w1 scenario run **with** and **without** SDN `LOAD` feedback | Directly compares the proposed approach against a static baseline |
+| **P4 Failover timing** | detect→re-queue, detect→re-assign, kill→client-result (4 repeats) | Quantifies recovery speed under worker failure |
+| **P5 Repeated-failure robustness** | Job is correctly aborted after `MAX_ATTEMPTS` consecutive worker deaths | Proves the system does not re-queue forever |
+
+Artefacts written on every run:
+- `/tmp/sdn_perf_report.json` — raw numbers
+- `/tmp/sdn_perf_report.md` — ready-to-paste summary table for the report / viva
+
+Typical observed result for P3: under heavy synthetic load on `w1`, the static baseline still sends a large fraction of jobs to the congested worker; the SDN-aware scheduler steers most jobs away from it.
 
 Manual SDN-failure demo (Option A): `mininet> link s2 h3 down` → coordinator prints `controller reports the link to w1 is DOWN`, then `FAILURE` / `RECOVERY`. For the **backbone** failure demo instead, see §4b / §5.
 
