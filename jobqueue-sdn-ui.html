@@ -118,17 +118,63 @@ function toast(msg,kind=''){const el=$('#toast');if(!el)return;el.textContent=ms
 const show=(c,tag,m,k)=>nlog(c,('['+tag+']').padEnd(11)+m,k);
 const at=(d,f)=>{const t={t:S.t+d,f};S.timers.push(t);return t};
 function runTimers(){let due;while((due=S.timers.filter(x=>!x.x&&x.t<=S.t)).length){due.sort((a,b)=>a.t-b.t);due.forEach(x=>{x.x=1;x.f()})}S.timers=S.timers.filter(x=>!x.x)}
-function send(a,b,type,raw,meta={}){if(!S.running)return;const p={id:++S.pid,a,b,type,pl:raw,st:0,ss:S.t,label:raw,...meta};
- if(type=='HEARTBEAT'&&!$('#hb').checked){if(!LIVE)deliver(p);return}
- S.pkts.push(p);const d=document.createElement('div');d.className='lg';d.innerHTML=`${S.t.toFixed(1)}s <b>${a.name} → ${b.name}</b> ${raw}`;$('#pl').prepend(d);while($('#pl').children.length>80)$('#pl').lastChild.remove()}
+function send(a,b,type,raw,meta={}){
+  if(!S.running)return;
+  // Real network: cannot send from a dead/link-down host, and cannot reach one
+  if(a && (!a.alive || a.linkdown) && type!=='FIN')return;
+  if(b && (!b.alive || b.linkdown) && type!=='FIN'){
+    // Still log the attempt as dropped so the demo is honest
+    nlog(b||a,`${type} not sent — destination unreachable`,'err');
+    return;
+  }
+  if(type=='HEARTBEAT'&&!$('#hb').checked){if(!LIVE){const p={id:++S.pid,a,b,type,pl:raw,st:0,ss:S.t,label:raw,...meta};deliver(p)}return}
+  const hops=Math.max(1,(pathPts({a,b}).length-1));
+  const p={id:++S.pid,a,b,type,pl:raw,st:0,ss:S.t,label:raw,hops,...meta};
+  S.pkts.push(p);
+  const d=document.createElement('div');d.className='lg';
+  d.innerHTML=`${S.t.toFixed(1)}s <b>${a.name} → ${b.name}</b> ${raw}`;
+  $('#pl').prepend(d);while($('#pl').children.length>80)$('#pl').lastChild.remove();
+}
+function hopTime(p){
+  // Remaining travel after the first hop (host→switch). Cross-switch paths
+  // have more segments so packets visibly traverse the backbone.
+  const pts=pathPts(p);
+  const remaining=Math.max(1,pts.length-2); // segments after first switch
+  return L*remaining;
+}
 function step(){for(const p of S.pkts){const e=S.t-p.ss,k=p.a.id+'>'+p.b.id;
- if(p.st==0&&e>=L){p.ss=S.t;if(S.flows.has(k)||LIVE)p.st=2;else{p.st=1;nlog(ctrl(),`PACKET_IN s1: ${p.a.ip} -> ${p.b.ip}, no flow`,'warn')}}
- else if(p.st==1&&e>=.8){S.flows.add(k);nlog(ctrl(),`FLOW_MOD: ${p.a.id} -> ${p.b.id} installed`,'ok');p.st=2;p.ss=S.t}
- else if(p.st==2&&e>=L){if(deliver(p))p.st=3}
+ // Phase 0: first hop (host → own switch). Duration = L
+ if(p.st==0&&e>=L){
+   p.ss=S.t;
+   if(S.flows.has(k)||LIVE)p.st=2;
+   else{p.st=1;nlog(ctrl(),`PACKET_IN ${swFor(p.a)===sw1?'s1':'s2'}: ${p.a.ip} -> ${p.b.ip}, no flow`,'warn')}
+ }
+ // Phase 1: OpenFlow PACKET_IN → controller → FLOW_MOD (learning / reactive install)
+ else if(p.st==1&&e>=.8){
+   S.flows.add(k);
+   nlog(ctrl(),`FLOW_MOD: ${p.a.id} → ${p.b.id} installed on path`,'ok');
+   p.st=2;p.ss=S.t;
+ }
+ // Phase 2: remaining hops to destination. Duration scales with hop count
+ else if(p.st==2&&e>=hopTime(p)){if(deliver(p))p.st=3}
  else if(p.st==4&&e>=.6)p.st=3}
  S.pkts=S.pkts.filter(p=>p.st!=3)}
-function deliver(p){if(LIVE){liveArrive(p);return true}const d=p.b;if(!d.alive){nlog(d,`${p.type} arrived but host is down: dropped`,'err');p.st=4;p.ss=S.t;return false}
- ({client:cli,coord:coo,worker:wrk}[d.type])(d,p);return true}
+function deliver(p){
+  const d=p.b;
+  // Never deliver (or show success) to a dead / link-down host
+  if(d && (!d.alive || d.linkdown)){
+    nlog(d,`${p.type} arrived but host is down: dropped`,'err');
+    p.st=4;p.ss=S.t;
+    // still release sequencing gates so the UI does not stall
+    if(LIVE){
+      if(p.type==='SUBMIT'){flyingSUBMIT=Math.max(0,flyingSUBMIT-1);pumpHold()}
+      if(p.type==='JOB'){busyW.delete(d.id);pumpHold()}
+      if(p.type==='RESULT'){busyW.delete(p.a.id);pumpHold()}
+    }
+    return false;
+  }
+  if(LIVE){liveArrive(p);return true}
+  ({client:cli,coord:coo,worker:wrk}[d.type])(d,p);return true}
 
 /* ========== LIVE visual sequencing ==========
    Rules (what you asked for):
@@ -173,7 +219,11 @@ function bufferOrShowFinished(jobId, workerNode, line){
 // A worker died / was killed / lost its link: forget what it was doing so nothing waits for it forever
 function releaseWorker(n){
   busyW.delete(n.id);
-  for(let i=holdQ.length-1;i>=0;i--)if(holdQ[i].type==='JOB'&&holdQ[i].b===n)holdQ.splice(i,1);
+  for(let i=holdQ.length-1;i>=0;i--)if(holdQ[i].b===n||holdQ[i].a===n)holdQ.splice(i,1);
+  // Mark in-flight animations toward this host as dropped
+  for(const p of S.pkts){
+    if(p.b===n && p.st!==3 && p.st!==4){p.st=4;p.ss=S.t}
+  }
   pumpHold();
 }
 function jidOf(type,raw){
@@ -182,6 +232,8 @@ function jidOf(type,raw){
 }
 function canRelease(p){
   const type=p.type,raw=p.raw;
+  // Never release toward a dead / link-down host
+  if(p.b && (!p.b.alive || p.b.linkdown))return false;
   // 1) nothing after SUBMIT until all SUBMITs have landed
   if(type!=='SUBMIT'&&flyingSUBMIT>0)return false;
   const jid=jidOf(type,raw);
@@ -235,6 +287,11 @@ function pumpHold(){
   }
 }
 function enqueuePkt(a,b,type,raw){
+  // Do not animate traffic toward a dead or link-down host
+  if(b && (!b.alive || b.linkdown)){
+    nlog(b,`${type} suppressed — host is down`,'err');
+    return;
+  }
   if(!JOB_FLOW.has(type)){send(a,b,type,raw);return} // HB / REGISTER free
   if(type==='SUBMIT'){startAnim(a,b,type,raw);return} // concurrent SUBMITs
   // everything else is held until gates open
@@ -309,8 +366,21 @@ function coo(c,p){const C=c.st,s=p.a,x=p.pl.split('|'),w=C.workers.find(w=>w.nod
 function failure(c,w,why){const C=c.st;if(!w||!C.workers.includes(w))return;C.workers=C.workers.filter(v=>v!=w);show(c,'FAILURE',`Worker ${w.id} ${why}`,'err');
  S.jobs.filter(j=>j.status=='assigned'&&j.wref==w).forEach(j=>{j.status='queued (recovered)';j.worker=null;j.wref=null;j.requeues++;C.q.push(j);show(c,'RECOVERY',`${j.id} was running on ${w.id} -> put back in the queue`,'warn')});renderJobs()}
 function tick(c){if(!S.running)return;const C=c.st,T=+$('#to').value;
- if(T>0)for(const w of C.workers.slice())if(S.t-w.hb>T){failure(c,w,`silent for ${T}s (heartbeat timeout)`);send(c,w.node,'FIN','FIN',{gen:w.gen})}
- if(C.q.length){const w=C.workers.find(w=>!w.busy);if(w){const j=C.q.shift();w.busy=true;j.worker=w.id;j.wref=w;j.status='assigned';send(c,w.node,'JOB',`JOB|${j.id}|${j.n}`);show(c,'SCHEDULER',`${j.id} -> assigned to worker ${w.id}`)}}
+ // Heartbeat timeout → worker failure (same as real coordinator HB_TIMEOUT)
+ if(T>0)for(const w of C.workers.slice()){
+   if(!w.node.alive||w.node.linkdown){failure(c,w,'host unreachable');continue}
+   if(S.t-w.hb>T){failure(c,w,`silent for ${T}s (heartbeat timeout)`)}
+ }
+ // Schedule only to free, alive workers (never to a dead host)
+ if(C.q.length){
+   const w=C.workers.find(w=>!w.busy&&w.node.alive&&!w.node.linkdown);
+   if(w){
+     const j=C.q.shift();
+     w.busy=true;j.worker=w.id;j.wref=w;j.status='assigned';
+     send(c,w.node,'JOB',`JOB|${j.id}|${j.n}`);
+     show(c,'SCHEDULER',`${j.id} -> assigned to worker ${w.id}`);
+   }
+ }
  renderJobs();at(.5,()=>tick(c))}
 // ---- worker: simple_worker.py
 function startWorker(w){w.gen++;w.alive=true;w.frozen=false;w.buf=[];w.port=rp();const g=w.gen;
@@ -326,8 +396,43 @@ function wrk(w,p){if(w.frozen){w.buf.push(p);return}const x=p.pl.split('|');
 // ---- rendering
 function renderJobs(){$('#jt').innerHTML='<tr><th>job</th><th>client</th><th>n</th><th>status</th><th>worker</th><th>requeues</th><th>answer</th></tr>'+S.jobs.slice().reverse().map(j=>`<tr><td>${j.id||'...'}</td><td>${node(j.client)?node(j.client).name:'-'}</td><td>${j.n}</td><td>${j.status}</td><td>${j.worker||'-'}</td><td>${j.requeues}</td><td>${j.res}</td></tr>`).join('')}
 function lane(p,x0,y0,x1,y1){const dx=x1-x0,dy=y1-y0,d=Math.hypot(dx,dy)||1,o=((p.id%7)-3)*13;return[-dy/d*o,dx/d*o]}
-function pos(p){const A=anc(p.a),B=anc(p.b),k=Math.min(1,(S.t-p.ss)/L);
- if(p.st==0){const[ox,oy]=lane(p,A.x,A.y,sw.x,sw.y);return[A.x+(sw.x-A.x)*k+ox,A.y+(sw.y-A.y)*k+oy]}if(p.st==2){const[ox,oy]=lane(p,sw.x,sw.y,B.x,B.y);return[sw.x+(B.x-sw.x)*k+ox,sw.y+(B.y-sw.y)*k+oy]}if(p.st==4)return[B.x,B.y];return[sw.x,sw.y+40+(p.id%3)*22]}
+function lerp(a,b,t,p){const[ox,oy]=lane(p,a.x,a.y,b.x,b.y);return[a.x+(b.x-a.x)*t+ox,a.y+(b.y-a.y)*t+oy]}
+// Multi-hop path along the real wires:
+//   same switch side  →  host → switch → host
+//   cross (client/coord ↔ worker) → host → s1 → active backbone → s2 → host
+function pathPts(p){
+  const A=anc(p.a),B=anc(p.b);
+  const sa=swFor(p.a),sb=swFor(p.b);
+  if(sa===sb) return [A,sa,B];                 // same side of the network
+  // Cross the backbone: prefer the currently active link (primary or backup)
+  const midY=(sw1.y+sw2.y)/2;
+  const offY=backboneDown?10:-10;              // primary above, backup below
+  const bb1={x:sw1.x+30,y:midY+offY},bb2={x:sw2.x-30,y:midY+offY};
+  if(sa===sw1) return [A,sw1,bb1,bb2,sw2,B];
+  return [A,sw2,bb2,bb1,sw1,B];
+}
+function pos(p){
+  if(p.st==4){const B=anc(p.b);return[B.x,B.y]}
+  // st 0 = first hop (host → own switch)
+  // st 1 = PACKET_IN / FLOW_MOD (parked near switch, pulse to controller)
+  // st 2 = remaining hops along wires to destination
+  const pts=pathPts(p);
+  if(p.st==0){
+    const t=Math.min(1,(S.t-p.ss)/L);
+    return lerp(pts[0],pts[1],t,p);
+  }
+  if(p.st==2){
+    // Animate evenly across every remaining wire segment
+    const segs=pts.slice(1);
+    if(segs.length<2) return [pts[pts.length-1].x,pts[pts.length-1].y];
+    const t=Math.min(1,(S.t-p.ss)/hopTime(p));
+    const n=segs.length-1;
+    const ft=t*n,i=Math.min(n-1,Math.floor(ft)),f=ft-i;
+    return lerp(segs[i],segs[i+1],f,p);
+  }
+  // st 1: sit at first switch while controller reacts
+  return [pts[1].x, pts[1].y+36+(p.id%3)*16];
+}
 function draw(){let s='';const k=anc(ctrl());
  for(const p of S.pkts){const[x,y]=pos(p),w=p.label.length*6.2+14,dead=p.st==4,c=dead?'#dc2626':COL[p.type];
   if(p.st==1){const e=Math.min(1,(S.t-p.ss)/.8),t=e<.5?e*2:2-e*2,cx=sw.x+(k.x-sw.x)*t,cy=sw.y+(k.y-sw.y)*t;s+=`<circle cx="${cx}" cy="${cy}" r="6" fill="#94a3b8"/><text x="${cx+10}" y="${cy+3}" font-size="9" fill="var(--mut)">${e<.5?'PACKET_IN':'FLOW_MOD'}</text>`}
@@ -358,7 +463,18 @@ $('#burst').onclick=()=>{const cs=nodes.filter(n=>n.type=='client');if(!cs.lengt
 $('#cards').onclick=e=>{const b=e.target.closest('button[data-a]');if(!b)return;const n=node(b.dataset.i),a=b.dataset.a;
  if(LIVE){if(a=='rm'){api('remove',{host:n.id});nodes=nodes.filter(x=>x!=n);build()}else if(a=='frz')api('freeze',{host:n.id});else if(a=='lnk')api('link',{host:n.id}).then(r=>{if(!r.ok)nlog(n,'link change failed: '+r.error,'err')});else api(n.alive?'kill':'revive',{host:n.id});return}
  if(a=='rm'){if(n.alive&&n.type=='worker'&&S.running)send(n,coord(),'FIN','FIN',{gen:n.gen});n.alive=false;nodes=nodes.filter(x=>x!=n)}
- else if(a=='kill'){if(n.alive){n.alive=false;n.frozen=false;if(n.timer)n.timer.x=1;nlog(n,'^C process killed','err');send(n,coord(),'FIN','FIN',{gen:n.gen})}else if(S.running)startWorker(n)}
+ else if(a=='kill'){
+  if(n.alive){
+    n.alive=false;n.frozen=false;if(n.timer)n.timer.x=1;
+    nlog(n,'^C process killed — host unreachable','err');
+    // Immediately tear down the worker at the coordinator (real TCP close)
+    const c=coord();
+    if(c&&c.st){
+      const w=c.st.workers.find(w=>w.node===n);
+      if(w)failure(c,w,'process killed');
+    }
+    releaseWorker(n);build();
+  }else if(S.running)startWorker(n)}
  else if(a=='frz'){n.frozen=!n.frozen;nlog(n,n.frozen?'process frozen (hung, no heartbeats)':'process resumed',n.frozen?'warn':'ok');
   if(!n.frozen){const b2=n.buf.splice(0);if(n.pend){const f=n.pend;n.pend=null;f()}b2.forEach(q=>{if(n.alive)wrk(n,q)})}}
  build()};
@@ -392,7 +508,7 @@ fetch('/api/ping').then(r=>r.json()).then(j=>{if(!j.ok)return;LIVE=true;L=.5;$('
    // SUBMITs fly now; ACK/JOB/RESULT/DONE held until SUBMITs land (see enqueuePkt)
    enqueuePkt(a,b,COL[t]?t:'ACK',m.label)}
   else if(m.type=='state'){const n=node(m.host);if(n){n.alive=m.alive;n.frozen=!!m.frozen;if(!m.alive)releaseWorker(n);build()}}
-  else if(m.type=='link'){const n=node(m.host);if(n){n.linkdown=!!m.down;nlog(ctrl(),`(you) ${n.id} link to its switch set ${m.down?'DOWN':'UP'}`,m.down?'warn':'ok');build();
+  else if(m.type=='link'){const n=node(m.host);if(n){n.linkdown=!!m.down;nlog(ctrl(),`(you) ${n.id} link to its switch set ${m.down?'DOWN':'UP'}`,m.down?'warn':'ok');if(m.down)releaseWorker(n);build();
    if(m.down)toast('🔗 Worker link DOWN → SDN notifies app → job will be re-queued','warn');else toast('Worker link restored','ok')}}
   else if(m.type=='backbone'){backboneDown=!!m.down;$('#bbl').textContent='Backbone link: '+(m.down?'DOWN (on backup)':'UP');$('#bbl').classList.toggle('go',m.down);build();
    toast(m.down?'⚡ SDN REROUTE: primary backbone DOWN → traffic moved to backup link':'↩ Backbone restored → traffic failed back to primary',m.down?'warn':'ok')}
