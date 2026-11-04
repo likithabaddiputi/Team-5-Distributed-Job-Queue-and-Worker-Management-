@@ -356,8 +356,24 @@ function sendJob(cid,n){const c=node(cid);if(!S.running){$('#clk').textContent='
 function cli(c,p){const x=p.pl.split('|');if(x[0]=='ACK'){nlog(c,`[CLIENT] Coordinator accepted it -> job ID: ${x[1]}`);nlog(c,'[CLIENT] Waiting for result...')}
  else if(x[0]=='DONE')nlog(c,`[CLIENT] RESULT for ${x[1]} = ${x[2]}`,'ok')}
 // ---- coordinator: simple_coordinator.py
+// ---- coordinator: simple_coordinator.py
 function coo(c,p){const C=c.st,s=p.a,x=p.pl.split('|'),w=C.workers.find(w=>w.node==s&&w.gen==p.gen);
- if(x[0]=='REGISTER'){C.workers.push({id:x[1],node:s,busy:false,hb:S.t,gen:p.gen});show(c,'WORKER',`${x[1]} connected from ('${s.ip}', ${s.port})   (workers online: ${C.workers.length})`)}
+ if(x[0]=='REGISTER'){
+   const newW = {id:x[1], node:s, busy:false, hb:S.t, gen:p.gen};
+   C.workers.push(newW);
+   show(c,'WORKER',`${x[1]} connected from ('${s.ip}', ${s.port})   (workers online: ${C.workers.length})`);
+   
+   // INSTANT DISPATCH: If there's a job waiting in the queue, assign it immediately to this new worker!
+   if(C.q.length > 0){
+     const j = C.q.shift();
+     newW.busy = true;
+     j.worker = newW.id;
+     j.wref = newW;
+     j.status = 'assigned';
+     send(c, newW.node, 'JOB', `JOB|${j.id}|${j.n}`);
+     show(c, 'SCHEDULER', `${j.id} -> assigned to worker ${newW.id}`);
+   }
+ }
  else if(x[0]=='SUBMIT'){const j=p.ref;j.id='job'+(++C.cnt);j.status='queued';C.q.push(j);send(c,s,'ACK','ACK|'+j.id);show(c,'CLIENT',`New job ${j.id} received from ('${s.ip}', ${s.port})   (n = ${j.n})`)}
  else if(x[0]=='HEARTBEAT'){if(w)w.hb=S.t}
  else if(x[0]=='RESULT'){const j=jobOf(x[1]);if(w)w.busy=false;if(j&&j.status=='assigned'){j.status='done';j.res=x[2];show(c,'RESULT',`${j.id} completed by ${w?w.id:'?'}   (answer = ${x[2]})`,'ok');send(c,node(j.client),'DONE',`DONE|${j.id}|${x[2]}`)}}
